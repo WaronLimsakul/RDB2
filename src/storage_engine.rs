@@ -1,5 +1,8 @@
 use EngineErr::*;
-use std::{collections::HashMap, error::Error, fmt::Display, fs, io::Write, path::PathBuf};
+use std::{
+    collections::HashMap, error::Error, fmt::Display, fs, io::Write,
+    path::PathBuf,
+};
 
 /// Allowed row types
 pub enum Type {
@@ -20,7 +23,9 @@ pub enum EngineErr {
 impl Display for EngineErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TableAlreadyExists(name) => write!(f, "Table {name} already exists."),
+            TableAlreadyExists(name) => {
+                write!(f, "Table {name} already exists.")
+            }
             FsErr(err) => write!(f, "Fs error: {}", err),
         }
     }
@@ -72,10 +77,14 @@ impl StorageEngine {
     // 1. check if file exists
     // 2. write the file header (error if file already exists)
     // 3. save table in tables cache
-    pub fn new_table(&mut self, name: &str, schema: TableSchema) -> Result<(), EngineErr> {
+    pub fn new_table(
+        &mut self,
+        name: &str,
+        schema: TableSchema,
+    ) -> Result<(), EngineErr> {
         let path = self.root_dir.join(name).with_extension("rdb");
 
-        let mut file = fs::OpenOptions::new()
+        let file = fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(path)
@@ -112,7 +121,9 @@ impl StorageEngine {
         mut file: fs::File,
         schema: TableSchema,
     ) -> Result<Table, EngineErr> {
-        match file.write(format!("hello, this is schema: {}", schema[0].0).as_bytes()) {
+        match file
+            .write(format!("hello, this is schema: {}", schema[0].0).as_bytes())
+        {
             Err(err) => Err(FsErr(Box::new(err))),
             _ => Ok(Table {
                 schema,
