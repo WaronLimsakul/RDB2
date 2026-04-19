@@ -4,7 +4,17 @@ use std::{
     path::PathBuf,
 };
 
+const TABLE_MAGIC_NUMBER: [u8; 8] =
+    [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef];
+const TABLE_FILE_EXTENSION: &str = "rdb";
+
+/// page size (basic disk read/write unit) in bytes
+/// TODO: should depends on arch
+const PAGE_SIZE: u32 = 4096;
+
 /// Allowed row types
+// NOTE: change this -> change Display, and other impl
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Type {
     Int,
     Uint,
@@ -14,10 +24,54 @@ pub enum Type {
     Bool,
 }
 
+impl Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Type::*;
+        match self {
+            Int => write!(f, "integer"),
+            Uint => write!(f, "unsigned integer"),
+            Long => write!(f, "long"),
+            Ulong => write!(f, "unsigned long"),
+            String => write!(f, "string"),
+            Bool => write!(f, "bolean"),
+        }
+    }
+}
+
+impl Type {
+    fn to_byte(&self) -> u8 {
+        use Type::*;
+        match self {
+            Int => 0,
+            Uint => 1,
+            Long => 2,
+            Ulong => 3,
+            String => 4,
+            Bool => 5,
+        }
+    }
+
+    fn from_byte(b: u8) -> Option<Type> {
+        use Type::*;
+        match b {
+            0 => Some(Int),
+            1 => Some(Uint),
+            2 => Some(Long),
+            3 => Some(Ulong),
+            4 => Some(String),
+            5 => Some(Bool),
+            _ => None,
+        }
+    }
+}
+
+/// Error type for engine, just display to see what to wanna say
 #[derive(Debug)]
 pub enum EngineErr {
     TableAlreadyExists(String),
     FsErr(Box<dyn Error>),
+    UnSupportedType(Type),
+    Empty(String),
 }
 
 impl Display for EngineErr {
@@ -27,15 +81,15 @@ impl Display for EngineErr {
                 write!(f, "Table {name} already exists.")
             }
             FsErr(err) => write!(f, "Fs error: {}", err),
+            UnSupportedType(t) => {
+                write!(f, "Type {t} unsupported for the task.")
+            }
+            Empty(what) => write!(f, "{what} is empty."),
         }
     }
 }
 
 impl std::error::Error for EngineErr {}
-
-/// page size (basic disk read/write unit) in bytes
-/// TODO: should depends on arch
-const PAGE_SIZE: u32 = 4096;
 
 /// 1 page = 1 b-tree node
 struct Page {}
@@ -74,15 +128,29 @@ impl StorageEngine {
 
     /// Create new table with given name and schema
     // It should
-    // 1. check if file exists
-    // 2. write the file header (error if file already exists)
-    // 3. save table in tables cache
+    // 1. check if schema valid
+    // 2. check if file exists
+    // 3. write the file header (error if file already exists)
+    // 4. save table in tables cache
     pub fn new_table(
         &mut self,
         name: &str,
         schema: TableSchema,
     ) -> Result<(), EngineErr> {
-        let path = self.root_dir.join(name).with_extension("rdb");
+        // check empty schema
+        if schema.is_empty() {
+            return Err(Empty(String::from("schema")));
+        }
+
+        // first check if first element (id) is ulong
+        if schema[0].1 != Type::Ulong {
+            return Err(UnSupportedType(schema[0].1));
+        }
+
+        let path = self
+            .root_dir
+            .join(name)
+            .with_extension(TABLE_FILE_EXTENSION);
 
         let file = fs::OpenOptions::new()
             .create_new(true)
@@ -90,7 +158,7 @@ impl StorageEngine {
             .open(path)
             .map_err(|_| TableAlreadyExists(name.to_string()))?;
 
-        let table = self.write_table_header(file, schema)?;
+        let table = write_table_header(file, schema)?;
 
         self.tables.insert(String::from(name), table);
         Ok(())
@@ -113,23 +181,34 @@ impl StorageEngine {
     //     println!("update called");
     // }
     //
+}
 
-    /// setup table header to a new file
-    /// see format in [adr file](../docs/adr/01-file-table-schema-format.md)
-    fn write_table_header(
-        &self,
-        mut file: fs::File,
-        schema: TableSchema,
-    ) -> Result<Table, EngineErr> {
-        match file
-            .write(format!("hello, this is schema: {}", schema[0].0).as_bytes())
-        {
-            Err(err) => Err(FsErr(Box::new(err))),
-            _ => Ok(Table {
-                schema,
-                pages: Vec::new(),
-            }),
-        }
+/// setup table header to a new file
+/// see format in [adr file](../docs/adr/01-file-table-schema-format.md)
+fn write_table_header(
+    mut file: fs::File,
+    schema: TableSchema,
+) -> Result<Table, EngineErr> {
+    // build header: starts with the magic number
+    let mut bytes = Vec::from(TABLE_MAGIC_NUMBER);
+
+    // how many columns
+    bytes.extend_from_slice(&schema.len().to_be_bytes());
+
+    // column data
+    for (col_name, t) in schema.iter() {
+        bytes.extend_from_slice(&col_name.len().to_be_bytes());
+        bytes.extend_from_slice(&col_name.as_bytes());
+        bytes.push(t.to_byte());
+    }
+
+    // write ts out
+    match file.write(&bytes) {
+        Err(err) => Err(FsErr(Box::new(err))),
+        _ => Ok(Table {
+            schema,
+            pages: Vec::new(),
+        }),
     }
 }
 
