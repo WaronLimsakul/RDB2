@@ -1,6 +1,10 @@
 use EngineErr::*;
 use std::{
-    collections::HashMap, error::Error, fmt::Display, fs, io::Write,
+    collections::HashMap,
+    error::Error,
+    fmt::Display,
+    fs,
+    io::{self, Read, Write},
     path::PathBuf,
 };
 
@@ -72,6 +76,9 @@ pub enum EngineErr {
     FsErr(Box<dyn Error>),
     UnSupportedType(Type),
     Empty(String),
+    InvalidMagicNumber,
+    InvalidUtf8,
+    InvalidTypeByte,
 }
 
 impl Display for EngineErr {
@@ -85,6 +92,9 @@ impl Display for EngineErr {
                 write!(f, "Type {t} unsupported for the task.")
             }
             Empty(what) => write!(f, "{what} is empty."),
+            InvalidMagicNumber => write!(f, "Unmatched magic number."),
+            InvalidUtf8 => write!(f, "Found invalid UTF-8."),
+            InvalidTypeByte => write!(f, "Found invalid type byte."),
         }
     }
 }
@@ -185,8 +195,8 @@ impl StorageEngine {
 
 /// setup table header to a new file
 /// see format in [adr file](../docs/adr/01-file-table-schema-format.md)
-fn write_table_header(
-    mut file: fs::File,
+fn write_table_header<W: io::Write>(
+    mut writer: W,
     schema: TableSchema,
 ) -> Result<Table, EngineErr> {
     // build header: starts with the magic number
@@ -203,13 +213,67 @@ fn write_table_header(
     }
 
     // write ts out
-    match file.write(&bytes) {
+    match writer.write(&bytes) {
         Err(err) => Err(FsErr(Box::new(err))),
         _ => Ok(Table {
             schema,
             pages: Vec::new(),
         }),
     }
+}
+
+/// read table metadata from reader
+// It should
+// 1. check the magic number
+// 2. parse all the column name and type
+// 3. return table schema
+fn read_table_header<R: io::Read>(reader: R) -> Result<TableSchema, EngineErr> {
+    let mut br = io::BufReader::new(reader);
+
+    let mut magic = [0u8; 8];
+    br.read_exact(magic.as_mut_slice())
+        .map_err(|e| FsErr(Box::new(e)))?;
+    if magic != TABLE_MAGIC_NUMBER {
+        return Err(InvalidMagicNumber);
+    }
+
+    let num_cols = read_usize(&mut br)?;
+    let mut schema: TableSchema = Vec::with_capacity(num_cols);
+
+    for _ in 0..num_cols {
+        let str_len = read_usize(&mut br)?;
+        let col_name = read_string(&mut br, str_len)?;
+
+        let mut col_type_byte = [0u8];
+        br.read_exact(col_type_byte.as_mut_slice())
+            .map_err(|e| FsErr(Box::new(e)))?;
+        let col_type =
+            Type::from_byte(col_type_byte[0]).ok_or(InvalidTypeByte)?;
+
+        schema.push((col_name, col_type));
+    }
+
+    return Ok(schema);
+}
+
+/// helper function for reading usize from reader
+fn read_usize<R: Read>(reader: &mut R) -> Result<usize, EngineErr> {
+    let mut buf = [0u8; 8];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| FsErr(Box::new(e)))?;
+    Ok(usize::from_be_bytes(buf))
+}
+
+fn read_string<R: Read>(
+    reader: &mut R,
+    len: usize,
+) -> Result<String, EngineErr> {
+    let mut str_bytes = vec![0u8; len];
+    reader
+        .read_exact(str_bytes.as_mut_slice())
+        .map_err(|e| FsErr(Box::new(e)))?;
+    String::from_utf8(str_bytes).map_err(|_| InvalidUtf8)
 }
 
 #[cfg(test)]
