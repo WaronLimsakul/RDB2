@@ -120,8 +120,6 @@ pub struct StorageEngine {
     tables: HashMap<String, Table>, // filename -> table abstract
 }
 
-// TODO: see if it should be method or just fn
-// TODO 2: define custom error, see if defined here or other place
 impl StorageEngine {
     pub fn new(root: &str) -> Result<StorageEngine, EngineErr> {
         if let Ok(false) = fs::exists(root) {
@@ -278,5 +276,24 @@ fn read_string<R: Read>(
 
 #[cfg(test)]
 mod tests {
-    // TODO
+    use super::*;
+
+    #[test]
+    fn test_read_write_header() {
+        let schema: TableSchema = vec![
+            (String::from("id"), Type::Ulong),
+            (String::from("name"), Type::String),
+            (String::from("age"), Type::Uint),
+            (String::from("retired"), Type::Bool),
+        ];
+
+        // test writing normal header
+        let mut buf: Vec<u8> = Vec::new();
+        assert!(write_table_header(&mut buf, schema.clone()).is_ok());
+
+        // test reading the header
+        let res = read_table_header(buf.as_slice());
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), schema);
+    }
 }
