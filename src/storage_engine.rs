@@ -281,19 +281,19 @@ mod tests {
     #[test]
     fn test_read_write_header() {
         let schema: TableSchema = vec![
-            (String::from("id"), Type::Ulong),
-            (String::from("name"), Type::String),
-            (String::from("age"), Type::Uint),
-            (String::from("retired"), Type::Bool),
+            ("id".to_string(), Type::Ulong),
+            ("name".to_string(), Type::String),
+            ("age".to_string(), Type::Uint),
+            ("retired".to_string(), Type::Bool),
         ];
 
         // test writing normal header
         let mut buf: Vec<u8> = Vec::new();
-        assert!(write_table_header(&mut buf, schema.clone()).is_ok());
+        write_table_header(&mut buf, schema.clone())
+            .expect("Test write failed");
 
         // test reading the header
-        let res = read_table_header(buf.as_slice());
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), schema);
+        let res = read_table_header(buf.as_slice()).expect("Test read failed");
+        assert_eq!(res, schema);
     }
 }
