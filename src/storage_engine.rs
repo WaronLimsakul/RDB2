@@ -27,16 +27,6 @@ pub enum Type {
     Bool,
 }
 
-/// Column types with data
-pub enum TypeData {
-    Int(i32),
-    Uint(u32),
-    Long(i64),
-    Ulong(u64),
-    String(String),
-    Bool(bool),
-}
-
 impl Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use Type::*;
@@ -78,6 +68,16 @@ impl Type {
     }
 }
 
+/// Column types with data
+pub enum TypeData {
+    Int(i32),
+    Uint(u32),
+    Long(i64),
+    Ulong(u64),
+    String(String),
+    Bool(bool),
+}
+
 /// Error type for engine, just display to see what to wanna say
 #[derive(Debug)]
 pub enum EngineErr {
@@ -112,13 +112,26 @@ impl Display for EngineErr {
 
 impl std::error::Error for EngineErr {}
 
+/// value in cell
+enum CellValue {
+    Internal(u32),
+    Leaf(TypeData),
+}
+
+/// cell in page slot
+struct Cell {
+    key: u64,
+    val: CellValue,
+}
+
 /// 1 page = 1 b-tree node
+/// see format in [adr file](../docs/adr/02-b-tree-format.md)
 struct Page {
-    id: u64,
-    keys: Vec<u64>,
-    vals: Vec<u64>,
+    id: u32,
     is_leaf: bool,
     is_dirty: bool,
+    rightmost_val: u32, // for internal node
+    cells: Vec<Cell>,
 }
 
 /// Represent user-defined row schema in order
