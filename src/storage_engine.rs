@@ -4,7 +4,7 @@ use std::{
     error::Error,
     fmt::Display,
     fs,
-    io::{self, Read, Write},
+    io::{self, BufReader, Read, Write},
     path::PathBuf,
 };
 
@@ -13,10 +13,9 @@ const TABLE_MAGIC_NUMBER: [u8; 8] =
 const TABLE_FILE_EXTENSION: &str = "rdb";
 
 /// page size (basic disk read/write unit) in bytes
-/// TODO: should depends on arch
 const PAGE_SIZE: u32 = 4096;
 
-/// Allowed row types
+/// Allowed columns types
 // NOTE: change this -> change Display, and other impl
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Type {
@@ -26,6 +25,16 @@ pub enum Type {
     Ulong,
     String,
     Bool,
+}
+
+/// Column types with data
+pub enum TypeData {
+    Int(i32),
+    Uint(u32),
+    Long(i64),
+    Ulong(u64),
+    String(String),
+    Bool(bool),
 }
 
 impl Display for Type {
@@ -79,6 +88,7 @@ pub enum EngineErr {
     InvalidMagicNumber,
     InvalidUtf8,
     InvalidTypeByte,
+    InvalidStrLenght,
 }
 
 impl Display for EngineErr {
@@ -95,6 +105,7 @@ impl Display for EngineErr {
             InvalidMagicNumber => write!(f, "Unmatched magic number."),
             InvalidUtf8 => write!(f, "Found invalid UTF-8."),
             InvalidTypeByte => write!(f, "Found invalid type byte."),
+            InvalidStrLenght => write!(f, "Invalid string length."),
         }
     }
 }
@@ -102,16 +113,22 @@ impl Display for EngineErr {
 impl std::error::Error for EngineErr {}
 
 /// 1 page = 1 b-tree node
-struct Page {}
+struct Page {
+    id: u64,
+    keys: Vec<u64>,
+    vals: Vec<u64>,
+    is_leaf: bool,
+    is_dirty: bool,
+}
 
 /// Represent user-defined row schema in order
-/// NOTE: first one must be id and should be comparable type for now
+/// First one must be ULong (id)
 type TableSchema = Vec<(String, Type)>;
 
 /// Represent a file or table
 struct Table {
     schema: TableSchema,
-    pages: Vec<Page>,
+    pages: Vec<Option<Page>>, // capable of holding empty page
 }
 
 /// Represent lower level engine that deals with disk's files
@@ -166,9 +183,15 @@ impl StorageEngine {
             .open(path)
             .map_err(|_| TableAlreadyExists(name.to_string()))?;
 
-        let table = write_table_header(file, schema)?;
+        write_table_header(file, &schema)?;
 
-        self.tables.insert(String::from(name), table);
+        self.tables.insert(
+            String::from(name),
+            Table {
+                schema,
+                pages: Vec::new(),
+            },
+        );
         Ok(())
     }
 
@@ -177,9 +200,34 @@ impl StorageEngine {
         println!("flush table {name}");
     }
 
-    // pub fn insert(table_id: u32, node_id: u32) {
-    //     println!("insert called");
-    // }
+    /// Insert row to target table with provided information
+    /// requires: data is valid for table schema
+    // 1. check if table in cache: if not, fetch it
+    // 2. check if ID already exists: if so, error
+    // 3. insert row to node
+    pub fn insert_row(
+        &mut self,
+        table_name: &str,
+        data: Vec<(String, TypeData)>,
+    ) -> Result<(), EngineErr> {
+        // fetch table metadata if not there
+        if !self.tables.contains_key(table_name) {
+            let file =
+                fs::File::open(table_name).map_err(|e| FsErr(Box::new(e)))?;
+            self.tables.insert(
+                table_name.to_string(),
+                Table {
+                    schema: read_table_header(file)?,
+                    pages: Vec::new(),
+                },
+            );
+        }
+
+        // update
+
+        return Ok(());
+    }
+
     //
     // pub fn delete(table_id: u32, node_id: u32) {
     //     println!("delete called");
@@ -191,12 +239,18 @@ impl StorageEngine {
     //
 }
 
+/// return length of string in u16
+fn str_len(s: &String) -> Result<[u8; 2], EngineErr> {
+    let data = u16::try_from(s.len()).map_err(|_| InvalidStrLenght)?;
+    return Ok(data.to_be_bytes());
+}
+
 /// setup table header to a new file
 /// see format in [adr file](../docs/adr/01-file-table-schema-format.md)
 fn write_table_header<W: io::Write>(
     mut writer: W,
-    schema: TableSchema,
-) -> Result<Table, EngineErr> {
+    schema: &TableSchema,
+) -> Result<(), EngineErr> {
     // build header: starts with the magic number
     let mut bytes = Vec::from(TABLE_MAGIC_NUMBER);
 
@@ -205,7 +259,7 @@ fn write_table_header<W: io::Write>(
 
     // column data
     for (col_name, t) in schema.iter() {
-        bytes.extend_from_slice(&col_name.len().to_be_bytes());
+        bytes.extend_from_slice(&str_len(col_name)?);
         bytes.extend_from_slice(&col_name.as_bytes());
         bytes.push(t.to_byte());
     }
@@ -213,10 +267,7 @@ fn write_table_header<W: io::Write>(
     // write ts out
     match writer.write(&bytes) {
         Err(err) => Err(FsErr(Box::new(err))),
-        _ => Ok(Table {
-            schema,
-            pages: Vec::new(),
-        }),
+        _ => Ok(()),
     }
 }
 
@@ -235,12 +286,11 @@ fn read_table_header<R: io::Read>(reader: R) -> Result<TableSchema, EngineErr> {
         return Err(InvalidMagicNumber);
     }
 
-    let num_cols = read_usize(&mut br)?;
+    let num_cols = read_u64(&mut br)?;
     let mut schema: TableSchema = Vec::with_capacity(num_cols);
 
     for _ in 0..num_cols {
-        let str_len = read_usize(&mut br)?;
-        let col_name = read_string(&mut br, str_len)?;
+        let col_name = read_string(&mut br)?;
 
         let mut col_type_byte = [0u8];
         br.read_exact(col_type_byte.as_mut_slice())
@@ -255,7 +305,7 @@ fn read_table_header<R: io::Read>(reader: R) -> Result<TableSchema, EngineErr> {
 }
 
 /// helper function for reading usize from reader
-fn read_usize<R: Read>(reader: &mut R) -> Result<usize, EngineErr> {
+fn read_u64<R: Read>(reader: &mut R) -> Result<usize, EngineErr> {
     let mut buf = [0u8; 8];
     reader
         .read_exact(&mut buf)
@@ -263,11 +313,19 @@ fn read_usize<R: Read>(reader: &mut R) -> Result<usize, EngineErr> {
     Ok(usize::from_be_bytes(buf))
 }
 
-fn read_string<R: Read>(
-    reader: &mut R,
-    len: usize,
-) -> Result<String, EngineErr> {
-    let mut str_bytes = vec![0u8; len];
+/// helper function for reading u16 from reader
+fn read_u16<R: Read>(reader: &mut R) -> Result<u16, EngineErr> {
+    let mut buf = [0u8; 2];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| FsErr(Box::new(e)))?;
+    Ok(u16::from_be_bytes(buf))
+}
+
+/// read rdb string from reader
+fn read_string<R: Read>(reader: &mut R) -> Result<String, EngineErr> {
+    let len = read_u16(reader)?;
+    let mut str_bytes = vec![0u8; usize::from(len)];
     reader
         .read_exact(str_bytes.as_mut_slice())
         .map_err(|e| FsErr(Box::new(e)))?;
@@ -289,8 +347,7 @@ mod tests {
 
         // test writing normal header
         let mut buf: Vec<u8> = Vec::new();
-        write_table_header(&mut buf, schema.clone())
-            .expect("Test write failed");
+        write_table_header(&mut buf, &schema).expect("Test write failed");
 
         // test reading the header
         let res = read_table_header(buf.as_slice()).expect("Test read failed");
