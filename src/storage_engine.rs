@@ -22,7 +22,7 @@ pub enum Type {
     Uint,
     Long,
     Ulong,
-    String,
+    String, // size (u16) + utf-8
     Bool,
 }
 
@@ -104,12 +104,62 @@ pub enum ColData {
     Bool(bool),
 }
 
+impl ColData {
+    fn size(&self) -> usize {
+        use ColData::*;
+        match self {
+            Int(_) | Uint(_) => 4,
+            Long(_) | Ulong(_) => 8,
+            String(s) => 2 + s.len(),
+            Bool(_) => 1,
+        }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        use ColData::*;
+        match self {
+            Int(d) => d.to_be_bytes().to_vec(),
+            Uint(d) => d.to_be_bytes().to_vec(),
+            Long(d) => d.to_be_bytes().to_vec(),
+            Ulong(d) => d.to_be_bytes().to_vec(),
+            String(s) => {
+                let len = u16::try_from(s.len()).unwrap();
+                let mut buffer = Vec::with_capacity(2 + s.len());
+                buffer.extend_from_slice(&len.to_be_bytes());
+                buffer.extend_from_slice(&s.as_bytes());
+                buffer
+            }
+            Bool(true) => vec![1u8],
+            Bool(false) => vec![0u8],
+        }
+    }
+}
+
 /// Key type with data
 // NOTE: derived impl says Uint < Ulong
 #[derive(PartialEq, PartialOrd, Debug, Clone, Copy)]
 pub enum KeyData {
     Uint(u32),
     Ulong(u64),
+}
+
+impl KeyData {
+    fn size(&self) -> usize {
+        use KeyData::*;
+        match self {
+            Uint(_) => 4,
+            Ulong(_) => 8,
+        }
+    }
+
+    /// Returns its representation as bytes
+    fn to_bytes(&self) -> Vec<u8> {
+        use KeyData::*;
+        match self {
+            Uint(d) => d.to_be_bytes().to_vec(),
+            Ulong(d) => d.to_be_bytes().to_vec(),
+        }
+    }
 }
 
 /// Error type for engine, just display to see what to wanna say
@@ -158,6 +208,17 @@ enum CellValue {
     Leaf(ColData),
 }
 
+impl CellValue {
+    /// Returns its raw size with no metadata
+    fn size(&self) -> usize {
+        use CellValue::*;
+        match self {
+            Internal(_) => 4,
+            Leaf(c) => c.size(),
+        }
+    }
+}
+
 /// A cell in page slot
 struct Cell<'a> {
     buffer: &'a [u8],
@@ -165,10 +226,46 @@ struct Cell<'a> {
 }
 
 impl<'a> Cell<'a> {
+    /// Creates cell from key and value
+    // TODO: can have write_to_slice, that just write all this to slice
+    // they provided directly
+    fn to_bytes(key: KeyData, val: CellValue) -> Vec<u8> {
+        use CellValue::*;
+        let key_size = u8::try_from(key.size()).unwrap();
+        match val {
+            Leaf(record) => {
+                let val_size = u32::try_from(record.size()).unwrap();
+                // 1 for key_size, 4 for val_size
+                let mut buffer = Vec::with_capacity(5 + val_size as usize + key_size as usize);
+                buffer.push(key_size);
+                buffer.extend_from_slice(&val_size.to_be_bytes());
+                buffer.extend_from_slice(&key.to_bytes());
+                buffer.extend_from_slice(&record.to_bytes());
+                return buffer;
+            }
+
+            Internal(ptr) => {
+                // 1 for key_size, 4 for ptr (u32)
+                let mut buffer = Vec::with_capacity(5 + key_size as usize);
+                buffer.push(key_size);
+                buffer.extend_from_slice(&ptr.to_be_bytes());
+                buffer.extend_from_slice(&key.to_bytes());
+                return buffer;
+            }
+        }
+    }
+
+    /// Returns its size in bytes
+    fn size(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// Get key size metadata
     fn key_size(&self) -> u8 {
         self.buffer[0]
     }
 
+    /// Get key data
     fn key(&self) -> Result<KeyData, EngineErr> {
         use KeyData::*;
         let key_size = self.key_size();
@@ -206,16 +303,28 @@ impl Page {
     const OFF_FREE_SPACE: usize = 11;
     const OFF_NEXT_NODE: usize = 13;
     const OFF_RIGHTMOST: usize = 17;
-    const OFF_PTRS: usize = 21;
+    const OFF_TOTAL_FREE_SPACE: usize = 21;
+    const OFF_PTRS: usize = 23;
 
-    // helper for reading u16
+    /// Read u16 from target pos
     fn read_u16(&self, pos: usize) -> u16 {
         u16::from_be_bytes(self.buffer[pos..pos + 2].try_into().unwrap())
     }
 
-    // helper for reading u32
+    /// Read u32 from target pos
     fn read_u32(&self, pos: usize) -> u32 {
         u32::from_be_bytes(self.buffer[pos..pos + 4].try_into().unwrap())
+    }
+
+    /// Writes src u16 to target pos
+    fn write_u16(&mut self, src: u16, pos: usize) {
+        self.buffer[pos..pos + 2].copy_from_slice(&src.to_be_bytes());
+    }
+
+    /// Write cell (key + val + metadata) to target pos
+    fn write_cell(&mut self, key: KeyData, val: CellValue, pos: usize) {
+        let cell_bytes = Cell::to_bytes(key, val);
+        self.buffer[pos..pos + cell_bytes.len()].copy_from_slice(&cell_bytes);
     }
 
     /// check if page is valid using magic number
@@ -238,9 +347,22 @@ impl Page {
     fn num_cells(&self) -> u16 {
         self.read_u16(Self::OFF_NUM_CELLS)
     }
+    fn set_num_cells(&mut self, val: u16) {
+        self.write_u16(val, Self::OFF_NUM_CELLS);
+    }
 
-    fn free_space(&self) -> u16 {
+    fn free_space_ptr(&self) -> u16 {
         self.read_u16(Self::OFF_FREE_SPACE)
+    }
+    fn set_space_ptr(&mut self, val: u16) {
+        self.write_u16(val, Self::OFF_FREE_SPACE);
+    }
+
+    fn total_free_space(&self) -> u16 {
+        self.read_u16(Self::OFF_TOTAL_FREE_SPACE)
+    }
+    fn set_total_free_space(&mut self, val: u16) {
+        self.write_u16(val, Self::OFF_TOTAL_FREE_SPACE);
     }
 
     fn next_node_id(&self) -> u32 {
@@ -252,7 +374,7 @@ impl Page {
         self.read_u32(Self::OFF_RIGHTMOST)
     }
 
-    /// get cell from the pointer with target index
+    /// Get cell from the pointer with target index
     fn cell(&self, index: u16) -> Cell {
         let ptr_offset = Self::OFF_PTRS + (2 * usize::from(index));
         let cell_offset = self.read_u16(ptr_offset) as usize;
@@ -273,11 +395,10 @@ impl Page {
         }
     }
 
-    /// Find cell from provided id:
+    /// Find pointer position from provided id:
     /// - internal: return cell that caller should traverse if ask for that ID
     /// - leaf: return kv with that id or where it should be were to insert
-    /// TODO: implement and check return type, + test
-    fn find_cell_pos(&self, id: KeyData) -> Result<u16, EngineErr> {
+    fn find_ptr_pos(&self, id: KeyData) -> Result<u16, EngineErr> {
         let mut l = 0;
         let mut r = self.num_cells();
 
@@ -294,20 +415,63 @@ impl Page {
         return Ok(l);
     }
 
-    // /// Performs physical insert cell to page, return `EngineErr::PageFull` if needed
-    // /// requires: val obey schema with no id in front, (already at key)
-    // ///
-    // /// - internal: we have (val, key) as a cell + (right most val)
-    // /// - leaf: we have (key, val) as a cell
-    // fn insert_cell(&self, key: KeyData, val: CellValue) -> Result<(), EngineErr> {
-    //     // TODO: free space system
-    //     let target_pos = self.find_cell_pos(key)?;
-    //     if self.cell(target_pos).key()? == key {
-    //         return Err(RowExists(key));
-    //     }
-    //
-    //     return Ok(false);
-    // }
+    /// Performs physical insert cell to page, return `EngineErr::PageFull` if needed
+    /// requires: val obey schema with no id in front, (already at key)
+    /// NOTE: For internal node case, don't have to change rightmost at all, we insert at most
+    /// to the left of rightmost. However, need a new_internal_node function to create
+    /// new internal with rightmost already there.
+    fn insert_cell(&mut self, key: KeyData, val: CellValue) -> Result<(), EngineErr> {
+        let front_ptr = Self::OFF_PTRS + (self.num_cells() * 2) as usize;
+        let back_ptr = self.free_space_ptr() as usize;
+
+        // 2 for a pointer and the rest for cell
+        let space_needed = if self.is_leaf() {
+            5 + key.size() + val.size() // 1 for key_size, 4 for val_size
+        } else {
+            1 + key.size() + val.size() // 1 for key_size
+        };
+
+        if back_ptr - front_ptr < space_needed {
+            // in case we can defragment
+            if self.total_free_space() as usize >= space_needed {
+                self.defragment()?;
+            } else {
+                return Err(PageFull);
+            }
+        }
+
+        // check if row already exists
+        let ptr_pos = self.find_ptr_pos(key)?;
+        if self.cell(ptr_pos).key()? == key {
+            return Err(RowExists(key));
+        }
+
+        // shift pointers so we can put new pointer
+        let start = ptr_pos as usize;
+        let end = front_ptr;
+        self.buffer.copy_within(start..end, start + 1);
+
+        // put pointer to target ptr pos
+        let cell_pos = u16::try_from(back_ptr - space_needed).unwrap();
+        self.write_u16(cell_pos, ptr_pos as usize);
+        // write cell to target target cell pos
+        self.write_cell(key, val, cell_pos as usize);
+
+        // update metadata
+        self.set_num_cells(self.num_cells() + 1);
+        self.set_space_ptr(cell_pos);
+        self.set_total_free_space(self.total_free_space() - space_needed as u16);
+
+        return Ok(());
+    }
+
+    /// Compacts the physical layout (get rid of useless gap)
+    // TODO:
+    fn defragment(&mut self) -> Result<(), EngineErr> {
+        return Ok(());
+    }
+
+    // TODO: delete and update
 }
 
 /// Represent user-defined row schema in order
@@ -433,7 +597,7 @@ fn write_table_header<W: io::Write>(mut writer: W, schema: &TableSchema) -> Resu
     let mut bytes = Vec::from(TABLE_MAGIC_NUMBER);
 
     // how many columns
-    bytes.extend(schema.num_cols().to_be_bytes());
+    bytes.extend_from_slice(&schema.num_cols().to_be_bytes());
 
     // key column data
     bytes.extend_from_slice(&str_len(&schema.key.0)?);
@@ -545,4 +709,10 @@ mod tests {
         let res = read_table_header(buf.as_slice()).expect("Test read failed");
         assert_eq!(res, schema);
     }
+
+    // TODO: test page level function
+    // - insert cell
+    // - read cell
+    // - find ptr pos
+    // - defragment
 }
