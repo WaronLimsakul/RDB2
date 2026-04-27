@@ -1,6 +1,6 @@
-use crate::storage_engine::{KeyType, StorageEngine, TableSchema, Type};
+use crate::storage::{KeyType, engine::StorageEngine, table::TableSchema};
 
-mod storage_engine;
+mod storage;
 
 fn main() {
     println!("Aight, let's get started");
