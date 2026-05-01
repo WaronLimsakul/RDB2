@@ -79,6 +79,7 @@ impl Pager {
         // create new page with new id
         let mut page = Page::new(false, [0u8; PAGE_SIZE]);
         let new_id = self.num_pages;
+        page.set_is_page();
         page.set_id(new_id);
 
         // add to cache
@@ -95,6 +96,7 @@ impl Pager {
         // create new page with new id
         let mut page = Page::new(false, [0u8; PAGE_SIZE]);
         let new_id = self.num_pages;
+        page.set_is_page();
         page.set_id(new_id);
 
         // add to cache

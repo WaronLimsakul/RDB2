@@ -132,6 +132,10 @@ impl Page {
         self.buffer[pos..pos + cell_bytes.len()].copy_from_slice(&cell_bytes);
     }
 
+    /// write page magic number
+    pub fn set_is_page(&mut self) {
+        self.write_u32(u32::from_be_bytes(PAGE_MAGIC_NUMBER), Self::OFF_MAGIC);
+    }
     /// check if page is valid using magic number
     pub fn is_page(&self) -> bool {
         PAGE_MAGIC_NUMBER == self.buffer[Self::OFF_MAGIC..Self::OFF_MAGIC + 4]

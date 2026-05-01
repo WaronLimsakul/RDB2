@@ -77,6 +77,7 @@ impl StorageEngine {
         // 1. find page to insert (traverse tree)
         // 2. insert
         // 3. if page full, split
+        self.tables[table_name].insert_row();
 
         return Ok(());
     }

@@ -133,6 +133,10 @@ impl Table {
         // write ts out
         writer.write(&bytes).map_err(|e| FsErr(Box::new(e)))
     }
+
+    /// Inserts row to it
+    /// TODO NOW
+    pub fn insert_row(&mut self) {}
 }
 
 /// return length of string in u16
