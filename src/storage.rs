@@ -178,6 +178,7 @@ pub enum EngineErr {
     InvalidKeySize(u8),
     RowExists(KeyData),
     PageFull,
+    PageNotExists(u32),
 }
 
 impl Display for EngineErr {
@@ -198,6 +199,7 @@ impl Display for EngineErr {
             InvalidKeySize(s) => write!(f, "Found invalid key size {s}."),
             RowExists(k) => write!(f, "Row with key {:?} already exists.", k),
             PageFull => write!(f, "Page full."),
+            PageNotExists(id) => write!(f, "Page id {id} doesn't exists."),
         }
     }
 }

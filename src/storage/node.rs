@@ -108,6 +108,19 @@ impl Page {
         Page { is_dirty, buffer }
     }
 
+    /// returns the bytes representation
+    pub fn bytes(&self) -> &[u8] {
+        &self.buffer
+    }
+    /// returns if the page is dirty
+    pub fn is_dirty(&self) -> bool {
+        self.is_dirty
+    }
+    /// set page to be dirty
+    fn make_dirty(&mut self) {
+        self.is_dirty = true;
+    }
+
     /// Read u16 from target pos
     fn read_u16(&self, pos: usize) -> u16 {
         u16::from_be_bytes(self.buffer[pos..pos + 2].try_into().unwrap())
@@ -117,19 +130,21 @@ impl Page {
         u32::from_be_bytes(self.buffer[pos..pos + 4].try_into().unwrap())
     }
 
-    /// Writes src u16 to target pos
+    /// Writes src u16 to target pos and set page to be dirty
     fn write_u16(&mut self, src: u16, pos: usize) {
         self.buffer[pos..pos + 2].copy_from_slice(&src.to_be_bytes());
+        self.make_dirty();
     }
-    /// Writes src u32 to target pos
+    /// Writes src u32 to target pos and set page to be dirty
     fn write_u32(&mut self, src: u32, pos: usize) {
         self.buffer[pos..pos + 4].copy_from_slice(&src.to_be_bytes());
+        self.make_dirty();
     }
-
-    /// Write cell (key + val + metadata) to target pos
+    /// Write cell (key + val + metadata) to target pos and set page to be dirty
     fn write_cell(&mut self, key: KeyData, val: CellValue, pos: usize) {
         let cell_bytes = Cell::to_bytes(key, val);
         self.buffer[pos..pos + cell_bytes.len()].copy_from_slice(&cell_bytes);
+        self.make_dirty();
     }
 
     /// write page magic number

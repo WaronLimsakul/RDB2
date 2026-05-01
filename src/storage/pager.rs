@@ -3,7 +3,11 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
 };
 
-use crate::storage::{PAGE_SIZE, node::Page};
+use crate::storage::{
+    EngineErr::{self, *},
+    PAGE_SIZE,
+    node::Page,
+};
 
 /// Trait for a anything pager can deal with
 /// (Should be file or mock file)
@@ -43,8 +47,7 @@ impl Pager {
             // Page exists but not on cache
             // read from src
             let mut buffer = [0u8; PAGE_SIZE];
-            let offset = self.header_size + (id as usize * PAGE_SIZE);
-            self.src.seek(SeekFrom::Start(offset as u64)).ok()?;
+            self.src.seek(SeekFrom::Start(self.node_offset(id))).ok()?;
             self.src.read_exact(&mut buffer).ok()?;
             // save to cache
             self.cache.insert(id, Page::new(false, buffer));
@@ -64,8 +67,7 @@ impl Pager {
             // Page exists but not on cache
             // read from src
             let mut buffer = [0u8; PAGE_SIZE];
-            let offset = self.header_size + (id as usize * PAGE_SIZE);
-            self.src.seek(SeekFrom::Start(offset as u64)).ok()?;
+            self.src.seek(SeekFrom::Start(self.node_offset(id))).ok()?;
             self.src.read_exact(&mut buffer).ok()?;
             // save to cache
             self.cache.insert(id, Page::new(false, buffer));
@@ -109,7 +111,45 @@ impl Pager {
     }
 
     /// Flush page by id, only flush if diry
-    pub fn flush_by_id() {}
+    pub fn flush_by_id(&mut self, id: u32) -> Result<(), EngineErr> {
+        if !self.cache.contains_key(&id) {
+            return Err(PageNotExists(id));
+        }
+
+        let page = &self.cache[&id];
+        // if not dirty, we're done
+        if !page.is_dirty() {
+            return Ok(());
+        }
+
+        // write to target offset
+        self.src
+            .seek(SeekFrom::Start(self.node_offset(id)))
+            .map_err(|e| FsErr(Box::new(e)))?;
+        self.src
+            .write_all(page.bytes())
+            .map_err(|e| FsErr(Box::new(e)))?;
+        Ok(())
+    }
+
     /// Flush all dirty pages in pager
-    pub fn flush() {}
+    pub fn flush(&mut self) -> Result<(), EngineErr> {
+        for (id, page) in self.cache.iter() {
+            if !page.is_dirty() {
+                continue;
+            }
+            self.src
+                .seek(SeekFrom::Start(self.node_offset(*id)))
+                .map_err(|e| FsErr(Box::new(e)))?;
+            self.src
+                .write_all(page.bytes())
+                .map_err(|e| FsErr(Box::new(e)))?;
+        }
+        Ok(())
+    }
+
+    /// calculates offset from start of the file to node
+    fn node_offset(&self, id: u32) -> u64 {
+        (self.header_size + ((id as usize) * PAGE_SIZE)) as u64
+    }
 }
