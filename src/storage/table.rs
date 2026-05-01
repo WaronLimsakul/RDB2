@@ -2,7 +2,7 @@ use std::io::{BufReader, Read, Write};
 
 use crate::storage::{
     EngineErr::{self, *},
-    KeyType, TABLE_MAGIC_NUMBER, Type,
+    KeyType, RowData, TABLE_MAGIC_NUMBER, Type,
     pager::{Pager, TableSrc},
 };
 
@@ -104,7 +104,7 @@ impl Table {
     }
 
     /// Write a table header to a writer. num_pages set to 0.
-    /// see format in [adr file](../docs/adr/06-root-id-and-page-count-in-file-header.md)
+    /// see format in [adr file](../../docs/adr/06-root-id-and-page-count-in-file-header.md)
     /// return number of bytes written
     pub fn write_header<W: Write>(mut writer: W, schema: &TableSchema) -> Result<usize, EngineErr> {
         // build header: starts with the magic number
@@ -135,8 +135,20 @@ impl Table {
     }
 
     /// Inserts row to it
-    /// TODO NOW
-    pub fn insert_row(&mut self) {}
+    // TODO NOW:
+    // 1. find page to insert (traverse tree)
+    // 2. insert
+    // 3. if page full, split
+    pub fn insert_row(&mut self, data: RowData) -> Result<(), EngineErr> {
+        let root_id = self.root_id;
+        let key = data.key;
+        let mut cur_page = self.pager.page_mut(root_id).ok_or(PageNotExists(root_id))?;
+        while !cur_page.is_leaf() {
+            cur_page = cur_page.find_ptr_pos(key);
+        }
+
+        Ok(())
+    }
 }
 
 /// return length of string in u16

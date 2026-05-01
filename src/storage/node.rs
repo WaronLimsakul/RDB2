@@ -1,92 +1,10 @@
-use crate::storage::{ColData, EngineErr, KeyData, PAGE_MAGIC_NUMBER, PAGE_SIZE};
-
-/// value in cell
-enum CellValue {
-    Internal(u32),
-    Leaf(ColData),
-}
-
-impl CellValue {
-    /// Returns its raw size with no metadata
-    fn size(&self) -> usize {
-        use CellValue::*;
-        match self {
-            Internal(_) => 4,
-            Leaf(c) => c.size(),
-        }
-    }
-}
-
-/// A cell in page slot
-struct Cell<'a> {
-    buffer: &'a [u8],
-    is_leaf: bool,
-}
-
-impl<'a> Cell<'a> {
-    /// Creates cell from key and value
-    // TODO: can have write_to_slice, that just write all this to slice
-    // they provided directly
-    fn to_bytes(key: KeyData, val: CellValue) -> Vec<u8> {
-        use CellValue::*;
-        let key_size = u8::try_from(key.size()).unwrap();
-        match val {
-            Leaf(record) => {
-                let val_size = u32::try_from(record.size()).unwrap();
-                // 1 for key_size, 4 for val_size
-                let mut buffer = Vec::with_capacity(5 + val_size as usize + key_size as usize);
-                buffer.push(key_size);
-                buffer.extend_from_slice(&val_size.to_be_bytes());
-                buffer.extend_from_slice(&key.to_bytes());
-                buffer.extend_from_slice(&record.to_bytes());
-                return buffer;
-            }
-
-            Internal(ptr) => {
-                // 1 for key_size, 4 for ptr (u32)
-                let mut buffer = Vec::with_capacity(5 + key_size as usize);
-                buffer.push(key_size);
-                buffer.extend_from_slice(&ptr.to_be_bytes());
-                buffer.extend_from_slice(&key.to_bytes());
-                return buffer;
-            }
-        }
-    }
-
-    /// Returns its size in bytes
-    fn size(&self) -> usize {
-        self.buffer.len()
-    }
-
-    /// Get key size metadata
-    fn key_size(&self) -> u8 {
-        self.buffer[0]
-    }
-
-    /// Get key data
-    fn key(&self) -> Result<KeyData, EngineErr> {
-        use super::KeyData::*;
-        let key_size = self.key_size();
-        match key_size {
-            4 => Ok(Uint(u32::from_be_bytes(
-                self.buffer[5..9].try_into().unwrap(),
-            ))),
-            8 => Ok(Ulong(u64::from_be_bytes(
-                self.buffer[5..13].try_into().unwrap(),
-            ))),
-            s => Err(EngineErr::InvalidKeySize(s)),
-        }
-    }
-
-    // TODO:
-    // fn value(&self, is_leaf: bool) -> CellValue {
-    //     if is_leaf {
-    //     }
-    // }
-}
+use crate::storage::{
+    ColData, EngineErr, KeyData, PAGE_MAGIC_NUMBER, PAGE_SIZE,
+    cell::{Cell, CellValue},
+};
 
 /// 1 page = 1 b-tree node
-/// see format in [adr file](../docs/adr/03-new-b-tree-format.md)
+/// see format in [arch](../../docs/adr/06-root-id-and-page-count-in-file-header.md)
 pub struct Page {
     is_dirty: bool,
     buffer: [u8; PAGE_SIZE],
@@ -201,45 +119,56 @@ impl Page {
         self.read_u32(Self::OFF_RIGHTMOST)
     }
 
-    /// Get cell from the pointer with target index
-    pub fn cell(&self, index: u16) -> Cell {
+    /// Get cell from the pointer with pointer index.
+    /// Pointer index := first cell in the page has index 0, then 1, so on ....
+    fn cell(&self, index: u16) -> Cell {
         let ptr_offset = Self::OFF_PTRS + (2 * usize::from(index));
         let cell_offset = self.read_u16(ptr_offset) as usize;
 
         if self.is_leaf() {
             let key_size = self.read_u32(cell_offset) as usize;
             let value_size = self.read_u32(cell_offset + 4) as usize;
-            Cell {
-                is_leaf: self.is_leaf(),
-                buffer: &self.buffer[cell_offset..cell_offset + 8 + key_size + value_size],
-            }
+            Cell::new(
+                &self.buffer[cell_offset..cell_offset + 8 + key_size + value_size],
+                self.is_leaf(),
+            )
         } else {
             let key_size = self.read_u32(cell_offset) as usize;
-            Cell {
-                is_leaf: self.is_leaf(),
-                buffer: &self.buffer[cell_offset..cell_offset + 8 + key_size],
-            }
+            Cell::new(
+                &self.buffer[cell_offset..cell_offset + 8 + key_size],
+                self.is_leaf(),
+            )
         }
     }
 
     /// Find pointer position from provided id:
     /// - internal: return cell that caller should traverse if ask for that ID
     /// - leaf: return kv with that id or where it should be were to insert
-    fn find_ptr_pos(&self, id: KeyData) -> Result<u16, EngineErr> {
+    fn find_ptr_pos(&self, key: KeyData) -> u16 {
         let mut l = 0;
         let mut r = self.num_cells();
 
         // binary search
         while l < r {
             let m = l + ((r - l) / 2);
-            if self.cell(m).key()? >= id {
+            if self.cell(m).key() >= key {
                 r = m;
             } else {
                 l = m + 1;
             }
         }
 
-        return Ok(l);
+        return l;
+    }
+
+    /// Returns id of the node that we suppose to traverse
+    /// in order to find the provided key.
+    pub fn traverse(&self, key: KeyData) -> u32 {
+        // shouldn't be used with leaf node
+        debug_assert!(self.is_leaf(), "traverse() called with leaf node");
+
+        let ptr = self.find_ptr_pos(key);
+        self.cell(ptr).value()
     }
 
     /// Performs physical insert cell to page, return `EngineErr::PageFull` if needed
@@ -268,8 +197,8 @@ impl Page {
         }
 
         // check if row already exists
-        let ptr_pos = self.find_ptr_pos(key)?;
-        if self.cell(ptr_pos).key()? == key {
+        let ptr_pos = self.find_ptr_pos(key);
+        if self.cell(ptr_pos).key() == key {
             return Err(EngineErr::RowExists(key));
         }
 

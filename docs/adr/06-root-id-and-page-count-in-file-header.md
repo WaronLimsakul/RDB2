@@ -22,3 +22,17 @@ Now file header is
     - 1 page = 1KB, 2^32 pages = 20TB, so I think `u32` make sense
 - Root node id: `u32`
 
+## Recap: page so far
+1. File header
+2. Pointers: bunch of `u16` offsets from start of page to cell
+3. Cells from the back. Should hold real record: depends
+    - Internal node = key cell
+        - key size in bytes: `u8` 
+        - child pointer: `u32`
+        - key: depends on key size
+    - Leaf node = kv cell
+        - key size in bytes: `u8`
+        - value size in bytes: `u32`
+        - key: depends on key size
+        - record: depends on data
+

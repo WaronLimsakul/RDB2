@@ -2,6 +2,7 @@
 //!
 //! Contains abstraction for RDB2 storage engine
 
+mod cell;
 pub mod engine;
 mod node;
 mod pager;
@@ -207,4 +208,7 @@ impl Display for EngineErr {
 impl std::error::Error for EngineErr {}
 
 /// Represents a row with data (not just schema)
-type RowData = (KeyData, Vec<ColData>);
+struct RowData {
+    key: KeyData,
+    vals: Vec<ColData>,
+}

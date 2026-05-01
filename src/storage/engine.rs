@@ -72,12 +72,7 @@ impl StorageEngine {
             self.tables
                 .insert(table_name.to_string(), Table::try_from_src(file)?);
         }
-
-        // TODO:
-        // 1. find page to insert (traverse tree)
-        // 2. insert
-        // 3. if page full, split
-        self.tables[table_name].insert_row();
+        self.tables.get_mut(table_name).unwrap().insert_row(data);
 
         return Ok(());
     }
