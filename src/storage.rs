@@ -136,6 +136,24 @@ impl ColData {
             Bool(false) => vec![0u8],
         }
     }
+
+    /// serialize its bytes representation into vector v
+    fn serialize_into(&self, v: &mut Vec<u8>) {
+        use ColData::*;
+        match self {
+            Int(d) => v.extend_from_slice(&d.to_be_bytes()),
+            Uint(d) => v.extend_from_slice(&d.to_be_bytes()),
+            Long(d) => v.extend_from_slice(&d.to_be_bytes()),
+            Ulong(d) => v.extend_from_slice(&d.to_be_bytes()),
+            String(s) => {
+                let len = u16::try_from(s.len()).unwrap();
+                v.extend_from_slice(&len.to_be_bytes());
+                v.extend_from_slice(&s.as_bytes());
+            }
+            Bool(true) => v.push(1u8),
+            Bool(false) => v.push(0u8),
+        };
+    }
 }
 
 /// Key type with data
@@ -207,8 +225,27 @@ impl Display for EngineErr {
 
 impl std::error::Error for EngineErr {}
 
+/// Record Data := Represent the row data except key
+struct RecData {
+    vals: Vec<ColData>,
+}
+
+impl RecData {
+    pub fn size(&self) -> usize {
+        self.vals.iter().map(|col_data| col_data.size()).sum()
+    }
+    /// Return bytes representation of record data
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(self.size());
+        for col in &self.vals {
+            col.serialize_into(&mut v);
+        }
+        v
+    }
+}
+
 /// Represents a row with data (not just schema)
 struct RowData {
     key: KeyData,
-    vals: Vec<ColData>,
+    vals: RecData,
 }

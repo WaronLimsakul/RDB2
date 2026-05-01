@@ -1,9 +1,9 @@
-use crate::storage::{ColData, EngineErr, KeyData};
+use crate::storage::{KeyData, RecData};
 
 /// value in cell
 pub enum CellValue {
     Internal(u32),
-    Leaf(ColData),
+    Leaf(RecData),
 }
 
 impl CellValue {
@@ -91,8 +91,8 @@ impl<'a> Cell<'a> {
         }
     }
 
-    // TODO NOW!:
-    // return value according to node type it's in
+    // TODO NOW!: I don't think the cell itself know what type it holds
+    // so it's only for caller to decide what is it
     /// Returns value according to node type it is in
     /// - Internal: id of node you can traverse
     /// - Leaf: record data
