@@ -1,10 +1,40 @@
+//! # Page format (4096 bytes = 1 B-tree node)
+//!
+//! Slotted page: header at front, cells grow from the back.
+//!
+//! ## Header (23 bytes)
+//!
+//! | Offset | Size | Description |
+//! |--------|------|-------------|
+//! | 0      | 4    | Magic number `PAGE_MAGIC_NUMBER` = `[0x50,0x41,0x47,0x45]` |
+//! | 4      | 4    | Node ID |
+//! | 8      | 1    | Flags: bit 7 = is_leaf, bit 8 = is_root |
+//! | 9      | 2    | Number of cells |
+//! | 11     | 2    | Free space pointer — offset of first free byte from the back |
+//! | 13     | 4    | Next sibling node ID |
+//! | 17     | 4    | Rightmost child node ID (internal only; unused for leaf) |
+//! | 21     | 2    | Total free space (needed because deletion fragments space) |
+//! | 23     | 2n   | Cell pointer array — `n` entries of `u16` byte offsets |
+//!
+//! Front of free space = `23 + num_cells * 2`.
+//! Back of free space = `free_space_ptr`.
+//! Space available = `back_ptr - front_ptr`.
+//! If `back_ptr - front_ptr < space_needed` and `total_free_space` is enough, defragment.
+//! Otherwise page is full.
+//!
+//! Cells are appended starting from `PAGE_SIZE` backward.
+//! See `cell.rs` for cell byte format.
+
 use crate::storage::{
-    ColData, EngineErr, KeyData, PAGE_MAGIC_NUMBER, PAGE_SIZE,
+    EngineErr, KeyData, PAGE_MAGIC_NUMBER, PAGE_SIZE,
     cell::{Cell, CellValue},
 };
 
+const NULL_NODE_ID: u32 = u32::MAX; // to annotate there is NO node
+
 /// 1 page = 1 b-tree node
 /// see format in [arch](../../docs/adr/06-root-id-and-page-count-in-file-header.md)
+#[derive(Clone, Copy)]
 pub struct Page {
     is_dirty: bool,
     buffer: [u8; PAGE_SIZE],
@@ -23,7 +53,9 @@ impl Page {
     const OFF_PTRS: usize = 23;
 
     pub fn new(is_dirty: bool, buffer: [u8; PAGE_SIZE]) -> Self {
-        Page { is_dirty, buffer }
+        let mut page = Page { is_dirty, buffer };
+        page.set_next_node_id(NULL_NODE_ID);
+        page
     }
 
     /// returns the bytes representation
@@ -82,11 +114,26 @@ impl Page {
     }
 
     pub fn is_leaf(&self) -> bool {
-        (self.buffer[Self::OFF_FLAGS] | 0x01) == 1
+        (self.buffer[Self::OFF_FLAGS] & 0x01) == 1
+    }
+    pub fn set_is_leaf(&mut self, val: bool) {
+        if val {
+            self.buffer[Self::OFF_FLAGS] |= 0x01;
+        } else {
+            self.buffer[Self::OFF_FLAGS] &= 0b11111110;
+        }
     }
 
+    /// Do we even need this?
     pub fn is_root(&self) -> bool {
-        (self.buffer[Self::OFF_FLAGS] | 0x02) == 1
+        (self.buffer[Self::OFF_FLAGS] & 0x02) == 2
+    }
+    pub fn set_is_root(&mut self, val: bool) {
+        if val {
+            self.buffer[Self::OFF_FLAGS] |= 0x02;
+        } else {
+            self.buffer[Self::OFF_FLAGS] &= 0b11111101;
+        }
     }
 
     pub fn num_cells(&self) -> u16 {
@@ -96,6 +143,7 @@ impl Page {
         self.write_u16(val, Self::OFF_NUM_CELLS);
     }
 
+    /// Offset to the free space we can put cell
     pub fn free_space_ptr(&self) -> u16 {
         self.read_u16(Self::OFF_FREE_SPACE)
     }
@@ -113,15 +161,26 @@ impl Page {
     pub fn next_node_id(&self) -> u32 {
         self.read_u32(Self::OFF_NEXT_NODE)
     }
+    pub fn set_next_node_id(&mut self, val: u32) {
+        self.write_u32(val, Self::OFF_NEXT_NODE);
+    }
 
     /// rightmost value for internal node
     pub fn rightmost_val(&self) -> u32 {
         self.read_u32(Self::OFF_RIGHTMOST)
     }
+    pub fn set_rightmost_val(&mut self, val: u32) {
+        self.write_u32(val, Self::OFF_RIGHTMOST);
+    }
 
     /// Get cell from the pointer with pointer index.
     /// Pointer index := first cell in the page has index 0, then 1, so on ....
-    fn cell(&self, index: u16) -> Cell {
+    /// requires: the index must be valid (< num_cells)
+    pub fn cell(&self, index: u16) -> Cell {
+        debug_assert!(
+            index < self.num_cells(),
+            "cell(): Index {index} not in node"
+        );
         let ptr_offset = Self::OFF_PTRS + (2 * usize::from(index));
         let cell_offset = self.read_u16(ptr_offset) as usize;
 
@@ -139,6 +198,16 @@ impl Page {
                 self.is_leaf(),
             )
         }
+    }
+
+    /// Try to get cell from the pointer with pointer index.
+    /// Pointer index := first cell in the page has index 0, then 1, so on ....
+    /// Returns None if index not in the node.
+    pub fn try_cell(&self, index: u16) -> Option<Cell> {
+        if index < self.num_cells() {
+            return None;
+        }
+        Some(self.cell(index))
     }
 
     /// Find pointer position from provided id:
@@ -163,12 +232,41 @@ impl Page {
 
     /// Returns id of the node that we suppose to traverse
     /// in order to find the provided key.
-    pub fn traverse(&self, key: KeyData) -> u32 {
+    /// requires: the node must be internal to be called
+    pub fn internal_get_child_id(&self, key: KeyData) -> u32 {
         // shouldn't be used with leaf node
-        debug_assert!(self.is_leaf(), "traverse() called with leaf node");
+        debug_assert!(!self.is_leaf(), "traverse() called with leaf node");
 
         let ptr = self.find_ptr_pos(key);
-        self.cell(ptr).value()
+
+        // know from debug_assert that it should be Internal
+        if let CellValue::Internal(val) = self.cell(ptr).value() {
+            return val;
+        } else {
+            panic!("Shouldn't happen.");
+        }
+    }
+
+    /// Return raw bytes value of cell that contains target key, if not found None
+    /// requires: The node must be leaf node
+    pub fn leaf_get_cell_by_key(&self, key: KeyData) -> Option<Vec<u8>> {
+        debug_assert!(
+            self.is_leaf(),
+            "leaf_get_cell_by_key() called by internal node"
+        );
+
+        // Find position
+        let ptr = self.find_ptr_pos(key);
+        let cell = self.try_cell(ptr)?;
+
+        if let CellValue::Leaf(val) = cell.value()
+            // it can be just close value
+            && cell.key() == key
+        {
+            return Some(val.to_vec());
+        } else {
+            return None;
+        }
     }
 
     /// Performs physical insert cell to page, return `EngineErr::PageFull` if needed
@@ -222,7 +320,7 @@ impl Page {
     }
 
     /// Compacts the physical layout (get rid of useless gap)
-    // TODO:
+    // TODO: implement and test it
     fn defragment(&mut self) -> Result<(), EngineErr> {
         return Ok(());
     }

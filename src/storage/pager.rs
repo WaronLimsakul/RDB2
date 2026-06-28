@@ -1,3 +1,7 @@
+//! # Pager
+//!
+//! Cache layer for disk's b-tree page
+
 use std::{
     collections::HashMap,
     io::{Read, Seek, SeekFrom, Write},
@@ -34,6 +38,10 @@ impl Pager {
             num_pages,
             header_size,
         }
+    }
+
+    pub fn num_pages(&self) -> u32 {
+        self.num_pages
     }
 
     /// Get immutable page with target page id
@@ -76,10 +84,10 @@ impl Pager {
         self.cache.get_mut(&id)
     }
 
-    /// Allocates new page with header, ready-to-use
+    /// Allocates new page with header, update its metadata and return it
     pub fn new_page(&mut self) -> &Page {
         // create new page with new id
-        let mut page = Page::new(false, [0u8; PAGE_SIZE]);
+        let mut page = Page::new(true, [0u8; PAGE_SIZE]);
         let new_id = self.num_pages;
         page.set_is_page();
         page.set_id(new_id);
@@ -93,10 +101,10 @@ impl Pager {
         return self.cache.get(&new_id).unwrap();
     }
 
-    /// Allocates new page with header and return mutable one
+    /// Allocates new page with header, update its metadata and return it in mutable
     pub fn new_page_mut(&mut self) -> &mut Page {
         // create new page with new id
-        let mut page = Page::new(false, [0u8; PAGE_SIZE]);
+        let mut page = Page::new(true, [0u8; PAGE_SIZE]);
         let new_id = self.num_pages;
         page.set_is_page();
         page.set_id(new_id);
@@ -151,5 +159,44 @@ impl Pager {
     /// calculates offset from start of the file to node
     fn node_offset(&self, id: u32) -> u64 {
         (self.header_size + ((id as usize) * PAGE_SIZE)) as u64
+    }
+
+    /// Registers new page into pager and return its assigned ID
+    pub fn reg_page(&mut self, mut page: Page) -> u32 {
+        let new_id = self.num_pages;
+        page.set_is_page();
+        page.set_id(new_id);
+
+        // add to cache
+        self.cache.insert(new_id, page);
+
+        // update num_pages
+        self.num_pages += 1;
+        // return new page
+        return new_id;
+    }
+
+    /// Register the page to pager using target id
+    /// NOTE: this method will override the page with target id if exists
+    pub fn reg_page_with_id(&mut self, mut page: Page, id: u32) {
+        page.set_is_page();
+        page.set_id(id);
+
+        // add to cache
+        self.cache.insert(id, page);
+
+        // update num_pages
+        self.num_pages += 1;
+    }
+
+    /// Take ownership of the page with target id
+    pub fn take_page(&mut self, id: u32) -> Option<Page> {
+        match self.cache.remove(&id) {
+            None => None,
+            Some(x) => {
+                self.num_pages -= 1;
+                Some(x)
+            }
+        }
     }
 }

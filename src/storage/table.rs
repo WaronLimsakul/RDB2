@@ -1,9 +1,45 @@
-use std::io::{BufReader, Read, Write};
+//! # File format (`.rdb` file)
+//!
+//! Header followed by pages (each `PAGE_SIZE` = 4096 bytes).
+//!
+//! ## Header
+//!
+//! | Offset | Size | Description |
+//! |--------|------|-------------|
+//! | 0      | 8    | Magic number `TABLE_MAGIC_NUMBER` = `[0x01,0x23,0x45,0x67,0x89,0xab,0xcd,0xef]` |
+//! | 8      | 4    | Page count (`u32`) |
+//! | 12     | 4    | Root node ID (`u32`) |
+//! | 16     | 8    | Column count (`u64`; first column is always the key) |
+//! | 24     | var  | Column entries (see below) |
+//!
+//! **Column entry** (repeat `num_cols` times):
+//!
+//! | Offset | Size | Description |
+//! |--------|------|-------------|
+//! | 0      | 2    | Name length (`u16`) |
+//! | 2      | n    | Name (UTF-8, n = name length) |
+//! | 2+n    | 1    | Column type `u8`: 0=Int, 1=Uint, 2=Long, 3=Ulong, 4=String, 5=Bool |
+//!
+//! ## Column value encoding (`ColData::to_bytes`)
+//!
+//! | Type | Encoding |
+//! |------|----------|
+//! | Int  | 4 bytes big-endian `i32` |
+//! | Uint | 4 bytes big-endian `u32` |
+//! | Long | 8 bytes big-endian `i64` |
+//! | Ulong| 8 bytes big-endian `u64` |
+//! | String | 2 bytes length (`u16`) + UTF-8 bytes |
+//! | Bool | 1 byte (0 or 1) |
+
+use std::io::{BufReader, Read, SeekFrom, Write};
 
 use crate::storage::{
     EngineErr::{self, *},
-    KeyType, RowData, TABLE_MAGIC_NUMBER, Type,
+    KeyData, KeyType, MAX_RECORD_SIZE, PAGE_SIZE, RecData, RowData, TABLE_MAGIC_NUMBER, Type,
+    cell::CellValue,
+    node::Page,
     pager::{Pager, TableSrc},
+    row_cursor::RowCursor,
 };
 
 /// Represent user-defined row schema in order
@@ -17,7 +53,27 @@ impl TableSchema {
     fn num_cols(&self) -> usize {
         1 + self.vals.len()
     }
+
+    /// Decoder raw bytes to RecData using the schema
+    pub fn decode_val(&self, bytes: &[u8]) -> Result<RecData, EngineErr> {
+        let mut vals = Vec::with_capacity(self.vals.len());
+        let mut offset = 0;
+
+        for (_, col_type) in &self.vals {
+            let (res, n_bytes_read) = col_type.decode(&bytes[offset..])?;
+            vals.push(res);
+            offset += n_bytes_read;
+        }
+        Ok(RecData { vals })
+    }
 }
+
+/// All table header offsets
+const OFF_TABLE_MAGIC_NUMBER: usize = 0;
+const OFF_TABLE_NUM_PAGES: usize = 8;
+const OFF_TABLE_ROOT_NODE_ID: usize = 12;
+const OFF_TABLE_NUM_COLUMNS: usize = 16;
+const OFF_TABLE_COLUMN_ENTRIES: usize = 24;
 
 /// Represent a file or table
 /// change metadata: change new, try_from_src, read_header
@@ -46,10 +102,11 @@ impl Table {
     /// Create a table by reading metadata from the reader
     // It should
     // 1. Read and check the magic number
-    // 2. Parse the table schema
-    // 3. Read the num pages
-    // 4. Get the header size from stream pos
-    // 5. Return table
+    // 2. Read the num pages
+    // 3. Read root node id
+    // 4. Parse the table schema
+    // 5. Get the header size from stream pos
+    // 6. Return table
     pub fn try_from_src<T: TableSrc + 'static>(reader: T) -> Result<Self, EngineErr> {
         let mut br = BufReader::new(reader);
 
@@ -65,6 +122,12 @@ impl Table {
             key: (String::new(), KeyType::Uint), // place holder
             vals: Vec::with_capacity(num_cols),
         };
+
+        // read num pages
+        let num_pages = read_u32(&mut br)?;
+
+        // read root id
+        let root_id = read_u32(&mut br)?;
 
         for i in 0..num_cols {
             let col_name = read_string(&mut br)?;
@@ -82,14 +145,7 @@ impl Table {
             }
         }
 
-        // read num pages
-        let num_pages = read_u32(&mut br)?;
-
-        // read root id
-        let root_id = read_u32(&mut br)?;
-
         // done with the header reading, now check header size
-
         // gotta align with inner position first
         br.seek_relative(0).map_err(|e| FsErr(Box::new(e)))?;
         let mut src = br.into_inner();
@@ -110,6 +166,11 @@ impl Table {
         // build header: starts with the magic number
         let mut bytes = Vec::from(TABLE_MAGIC_NUMBER);
 
+        // write 2 0's in u32
+        // 1. first 0 = number of page in u32
+        // 2. second 0 = initial root id in u32
+        bytes.extend_from_slice(&0u64.to_be_bytes());
+
         // how many columns
         bytes.extend_from_slice(&schema.num_cols().to_be_bytes());
 
@@ -125,29 +186,207 @@ impl Table {
             bytes.push(t.to_byte());
         }
 
-        // write 2 0's in u32
-        // 1. first 0 = number of page in u32
-        // 2. second 0 = initial root id in u32
-        bytes.extend_from_slice(&0u64.to_be_bytes());
-
         // write ts out
         writer.write(&bytes).map_err(|e| FsErr(Box::new(e)))
     }
 
-    /// Inserts row to it
-    // TODO NOW:
+    /// Inserts row to the table
     // 1. find page to insert (traverse tree)
     // 2. insert
     // 3. if page full, split
+    // requires: for now, not allow row size to exceed MAX_RECORD_SIZE
+    // TODO(overflow): implement overflow page
     pub fn insert_row(&mut self, data: RowData) -> Result<(), EngineErr> {
-        let root_id = self.root_id;
-        let key = data.key;
-        let mut cur_page = self.pager.page_mut(root_id).ok_or(PageNotExists(root_id))?;
-        while !cur_page.is_leaf() {
-            cur_page = cur_page.find_ptr_pos(key);
+        assert!(data.size() <= MAX_RECORD_SIZE);
+
+        // insert a page if table empty
+        if self.pager.num_pages() == 0 {
+            let root = self.pager.new_page();
+            self.root_id = root.id();
         }
 
-        Ok(())
+        // traverse the tree
+        let key = data.key;
+        let path = self.traverse_to_key(key)?;
+        let cur_page = self.pager.page_mut(*path.last().unwrap()).unwrap();
+
+        let res = cur_page.insert_cell(key, CellValue::Leaf(&data.vals.to_bytes()));
+        match res {
+            Ok(_) => Ok(()),
+            Err(PageFull) => {
+                self.split_insert_leaf(path, data)?;
+                Ok(())
+            }
+            e => e,
+        }
+    }
+
+    /// Return cursor that iterator over all rows
+    pub fn get_all_rows(&mut self) -> RowCursor {
+        RowCursor::new(&mut self.pager, self.root_id, &self.schema)
+    }
+
+    /// Return the row that contain the target key if found
+    pub fn find_row_by_key(&mut self, key: KeyData) -> Option<RowData> {
+        if self.pager.num_pages() == 0 {
+            return None;
+        }
+
+        let path = self.traverse_to_key(key).unwrap();
+        let page = self.pager.page(*path.last().unwrap())?;
+        let cell_val = page.leaf_get_cell_by_key(key)?;
+        let vals = self.schema.decode_val(&cell_val).ok()?;
+        Some(RowData { key, vals })
+    }
+
+    /// Flush all the change that happen to table to disk
+    pub fn flush(&mut self, mut table_src: Box<dyn TableSrc>) -> Result<(), EngineErr> {
+        // TODO(minor): may consider having num_pages_changed and root_node_changed fields
+        let num_pages = self.pager.num_pages();
+        let root_node_id = self.root_id;
+
+        table_src
+            .seek(SeekFrom::Start(OFF_TABLE_NUM_PAGES as u64))
+            .map_err(|e| FsErr(Box::new(e)))?;
+        table_src
+            .write(&num_pages.to_be_bytes())
+            .map_err(|e| FsErr(Box::new(e)))?;
+
+        // NOTE: Uncomment if root node id does not come after this num_pages
+        // table_src
+        //     .seek(SeekFrom::Start(OFF_TABLE_ROOT_NODE_ID as u64))
+        //     .map_err(|e| FsErr(Box::new(e)))?;
+
+        table_src
+            .write(&root_node_id.to_be_bytes())
+            .map_err(|e| FsErr(Box::new(e)))?;
+
+        return self.pager.flush();
+    }
+
+    /// Traverse from root to child that contain keydata, or where it should be if inserted.
+    /// Return the traversal path if possible.
+    fn traverse_to_key(&mut self, key: KeyData) -> Result<Vec<u32>, EngineErr> {
+        // starts from root
+        let root_id = self.root_id;
+        let mut cur_page = self.pager.page(root_id).ok_or(PageNotExists(root_id))?;
+        let mut path = vec![root_id]; // traverse path
+
+        // traverse the tree
+        while !cur_page.is_leaf() {
+            let child_id = cur_page.internal_get_child_id(key);
+            cur_page = self.pager.page(child_id).ok_or(PageNotExists(child_id))?; // go to child node
+            path.push(child_id); // update traverse path
+        }
+
+        Ok(path)
+    }
+
+    /// Splits the last node in traverse path and then insert
+    /// data record to this layer and parent appropriately. Split parent if need so.
+    /// requires: the last node in traverse path must be a leaf
+    ///
+    /// Implementation:
+    /// 1. Allocating new node
+    /// 2. Transfer half elements of old node to it
+    /// 3. Add first key and pointer (of new node) to parent
+    fn split_insert_leaf(&mut self, path: Vec<u32>, data: RowData) -> Result<(), EngineErr> {
+        let target_id = path.last().unwrap();
+        let new_page_id = self.split_page(*target_id)?;
+        let new_page = self.pager.page_mut(new_page_id).unwrap();
+        new_page
+            .insert_cell(data.key, CellValue::Leaf(&data.vals.to_bytes()))
+            .unwrap(); // shouldn't be page full right?
+        let new_page_first_key = new_page.cell(0).key();
+        return self.insert_to_parent(path, new_page_first_key, CellValue::Internal(new_page_id));
+    }
+
+    /// Splits the last node in traverse path and then insert
+    /// data to this layer and parent appropriately. Split parent if need so.
+    /// requires: the last node in traverse path must be internal node
+    ///
+    /// Implementation
+    /// 1. Allocating new node
+    /// 2. Transfer half elements of old node to it
+    /// 3. Move first key of the new node to parent instead.
+    fn split_insert_internal(
+        &mut self,
+        path: Vec<u32>,
+        key: KeyData,
+        val: CellValue, // Must be CellValue::Internal
+    ) -> Result<(), EngineErr> {
+        debug_assert!(
+            matches!(val, CellValue::Internal(_)),
+            "split_insert_internal() called with Leaf CellValue"
+        );
+        let target_id = *path.last().unwrap();
+        let new_page_id = self.split_page(target_id)?;
+        let new_page = self.pager.page_mut(new_page_id).unwrap();
+        new_page.insert_cell(key, val).unwrap(); // shouldn't be page full right?
+        let new_page_first_key = new_page.cell(0).key();
+
+        return self.insert_to_parent(path, new_page_first_key, CellValue::Internal(new_page_id));
+    }
+
+    /// Splits a page with given id and return new page id
+    fn split_page(&mut self, id: u32) -> Result<u32, EngineErr> {
+        let mut left = self.pager.take_page(id).ok_or(PageNotExists(id))?;
+        let mut right = Page::new(true, [0u8; PAGE_SIZE]);
+
+        right.set_next_node_id(left.next_node_id());
+        // cell index to start copying to right node
+        let start_right = (left.num_cells() + 1) / 2;
+
+        for i in start_right..left.num_cells() {
+            let cell = left.cell(i);
+            right.insert_cell(cell.key(), cell.value()); // know that this won't be page full
+            // because it's just half of the target page
+        }
+
+        let right_id = self.pager.reg_page(right);
+        left.set_next_node_id(right_id);
+        Ok(right_id)
+    }
+
+    /// Helper for split_insert_leaf and split_insert_internal
+    /// Insert key and node id to parent (the second last node in path)
+    /// Create a new root if no parent found
+    fn insert_to_parent(
+        &mut self,
+        mut path: Vec<u32>,
+        key: KeyData,
+        val: CellValue,
+    ) -> Result<(), EngineErr> {
+        debug_assert!(
+            !path.is_empty(),
+            "insert_to_parent() called with empty path"
+        );
+        let child_id = *path.last().unwrap();
+        let parent_id = path.pop().unwrap();
+
+        if path.is_empty() {
+            debug_assert!(
+                self.pager.page(child_id).unwrap().is_root(),
+                "insert_to_parent(): first node in traverse path is not parent"
+            );
+            // unroot the old root
+            self.pager.page_mut(child_id).unwrap().set_is_root(false);
+            // create a new internal node root
+            let root = self.pager.new_page_mut();
+            // set root
+            self.root_id = root.id();
+            root.set_is_root(true);
+            // insert
+            return root.insert_cell(key, val);
+        } else {
+            let parent = self.pager.page_mut(parent_id).unwrap();
+            let val_backup = val.clone();
+            return match parent.insert_cell(key, val) {
+                Err(EngineErr::PageFull) => self.split_insert_internal(path, key, val_backup),
+                Err(err) => Err(err),
+                _ => Ok(()),
+            };
+        }
     }
 }
 

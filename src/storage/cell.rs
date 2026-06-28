@@ -1,18 +1,40 @@
-use crate::storage::{KeyData, RecData};
+//! # Cell format (one entry in a page slot)
+//!
+//! Cell pointer in page header points here (offset from page start).
+//!
+//! ## Leaf cell
+//!
+//! | Offset | Size | Description |
+//! |--------|------|-------------|
+//! | 0      | 1    | key_size (`u8`, must be 4 or 8) |
+//! | 1      | 4    | val_size (`u32`, record length in bytes) |
+//! | 5      | ks   | Key bytes (`KeyData::to_bytes`, ks = key_size) |
+//! | 5+ks   | vs   | Record bytes (`ColData::to_bytes`, vs = val_size) |
+//!
+//! ## Internal cell
+//!
+//! | Offset | Size | Description |
+//! |--------|------|-------------|
+//! | 0      | 1    | key_size (`u8`, must be 4 or 8) |
+//! | 1      | 4    | child_ptr (`u32`, node ID to traverse to) |
+//! | 5      | ks   | Key bytes (`KeyData::to_bytes`, ks = key_size) |
 
+use crate::storage::KeyData;
+
+#[derive(Clone)]
 /// value in cell
-pub enum CellValue {
+pub enum CellValue<'a> {
     Internal(u32),
-    Leaf(RecData),
+    Leaf(&'a [u8]),
 }
 
-impl CellValue {
+impl<'a> CellValue<'a> {
     /// Returns its raw size with no metadata
     pub fn size(&self) -> usize {
         use CellValue::*;
         match self {
             Internal(_) => 4,
-            Leaf(c) => c.size(),
+            Leaf(c) => c.len(),
         }
     }
 }
@@ -35,14 +57,14 @@ impl<'a> Cell<'a> {
         use CellValue::*;
         let key_size = u8::try_from(key.size()).unwrap();
         match val {
-            Leaf(record) => {
-                let val_size = u32::try_from(record.size()).unwrap();
+            Leaf(record_bytes) => {
+                let val_size = u32::try_from(record_bytes.len()).unwrap();
                 // 1 for key_size, 4 for val_size
                 let mut buffer = Vec::with_capacity(5 + val_size as usize + key_size as usize);
                 buffer.push(key_size);
                 buffer.extend_from_slice(&val_size.to_be_bytes());
                 buffer.extend_from_slice(&key.to_bytes());
-                buffer.extend_from_slice(&record.to_bytes());
+                buffer.extend_from_slice(record_bytes);
                 return buffer;
             }
 
@@ -54,6 +76,29 @@ impl<'a> Cell<'a> {
                 buffer.extend_from_slice(&key.to_bytes());
                 return buffer;
             }
+        }
+    }
+
+    /// Returns value according to node type it is in
+    /// - Internal: id of node you can traverse
+    /// - Leaf: record data in BYTES (cell doesn't know the schema so it's
+    /// caller responsibility to interpret these bytes)
+    pub fn value(&self) -> CellValue<'a> {
+        if self.is_leaf {
+            let record_bytes = &self.buffer[5 + self.key_size() as usize..];
+            CellValue::Leaf(record_bytes)
+        } else {
+            // the "value" in the internal node entry is just child ptr
+            let child_ptr = u32::from_be_bytes(self.buffer[2..6].try_into().unwrap());
+            CellValue::Internal(child_ptr)
+        }
+    }
+
+    /// Return own bytes of value in cell
+    pub fn val_bytes(&self) -> Vec<u8> {
+        match self.value() {
+            CellValue::Internal(child_ptr) => child_ptr.to_be_bytes().to_vec(),
+            CellValue::Leaf(bytes) => bytes.to_vec(),
         }
     }
 
@@ -90,11 +135,4 @@ impl<'a> Cell<'a> {
             4
         }
     }
-
-    // TODO NOW!: I don't think the cell itself know what type it holds
-    // so it's only for caller to decide what is it
-    /// Returns value according to node type it is in
-    /// - Internal: id of node you can traverse
-    /// - Leaf: record data
-    pub fn value(&self) -> CellValue {}
 }

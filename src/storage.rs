@@ -3,9 +3,11 @@
 //! Contains abstraction for RDB2 storage engine
 
 mod cell;
+mod cursor;
 pub mod engine;
 mod node;
 mod pager;
+pub mod row_cursor;
 pub mod table;
 
 use EngineErr::*;
@@ -17,8 +19,13 @@ const TABLE_FILE_EXTENSION: &str = "rdb";
 const PAGE_SIZE: usize = 4096;
 const PAGE_MAGIC_NUMBER: [u8; 4] = [0x50, 0x41, 0x47, 0x45]; // "PAGE"
 
+const MAX_RECORD_SIZE: usize = PAGE_SIZE / 8;
+
 /// Allowed columns types
-// Change this -> change all impls, and ColData
+// Change this -> change
+// 1. all impls
+// 2. ColData
+// 3. TableSchema impl
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Type {
     Int,
@@ -53,6 +60,7 @@ impl From<KeyType> for Type {
 }
 
 impl Type {
+    /// Convert type to byte representation
     fn to_byte(&self) -> u8 {
         use Type::*;
         match self {
@@ -65,6 +73,7 @@ impl Type {
         }
     }
 
+    /// Try to convert a byte flag to type
     fn from_byte(b: u8) -> Option<Type> {
         use Type::*;
         match b {
@@ -75,6 +84,35 @@ impl Type {
             4 => Some(String),
             5 => Some(Bool),
             _ => None,
+        }
+    }
+
+    /// Decode bytes data into data of that type. Return the ColData and number of bytes read
+    fn decode(&self, bytes: &[u8]) -> Result<(ColData, usize), EngineErr> {
+        match self {
+            Type::Int => Ok((
+                ColData::Int(i32::from_be_bytes(bytes[0..4].try_into().unwrap())),
+                4,
+            )),
+            Type::Uint => Ok((
+                ColData::Uint(u32::from_be_bytes(bytes[0..4].try_into().unwrap())),
+                4,
+            )),
+            Type::Long => Ok((
+                ColData::Long(i64::from_be_bytes(bytes[0..8].try_into().unwrap())),
+                8,
+            )),
+            Type::Ulong => Ok((
+                ColData::Ulong(u64::from_be_bytes(bytes[0..8].try_into().unwrap())),
+                8,
+            )),
+            Type::String => {
+                let len = u16::from_be_bytes(bytes[0..2].try_into().unwrap()) as usize;
+                let s = String::from_utf8(bytes[2..2 + len].to_vec())
+                    .map_err(|_| EngineErr::InvalidUtf8)?;
+                Ok((ColData::String(s), 2 + len))
+            }
+            Type::Bool => Ok((ColData::Bool(bytes[0] == 1), 1)),
         }
     }
 }
@@ -187,6 +225,7 @@ impl KeyData {
 #[derive(Debug)]
 pub enum EngineErr {
     TableAlreadyExists(String),
+    TableNotFound(String),
     FsErr(Box<dyn Error>),
     UnSupportedType(Type),
     Empty(String),
@@ -219,6 +258,7 @@ impl Display for EngineErr {
             RowExists(k) => write!(f, "Row with key {:?} already exists.", k),
             PageFull => write!(f, "Page full."),
             PageNotExists(id) => write!(f, "Page id {id} doesn't exists."),
+            TableNotFound(table) => write!(f, "Table {table} not found."),
         }
     }
 }
@@ -245,7 +285,13 @@ impl RecData {
 }
 
 /// Represents a row with data (not just schema)
-struct RowData {
+pub struct RowData {
     key: KeyData,
     vals: RecData,
+}
+
+impl RowData {
+    pub fn size(&self) -> usize {
+        self.key.size() + self.vals.size()
+    }
 }

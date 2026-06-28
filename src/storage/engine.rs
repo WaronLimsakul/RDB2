@@ -1,7 +1,12 @@
+//! Storage Engine
+//!
+//! Whatever bad happen to the disk file, blame this guy
+
 use std::{collections::HashMap, fs, path::PathBuf};
 
 use crate::storage::{
     KeyData, RowData, TABLE_FILE_EXTENSION,
+    row_cursor::RowCursor,
     table::{Table, TableSchema},
 };
 
@@ -32,11 +37,7 @@ impl StorageEngine {
     // 1. write the file header (error if file already exists)
     // 2. save table in tables cache
     pub fn new_table(&mut self, name: &str, schema: TableSchema) -> Result<(), EngineErr> {
-        let path = self
-            .root_dir
-            .join(name)
-            .with_extension(TABLE_FILE_EXTENSION);
-
+        let path = self.get_table_file_path(name);
         let file = fs::File::options()
             .create_new(true)
             .read(true)
@@ -47,17 +48,28 @@ impl StorageEngine {
         let header_size = Table::write_header(&file, &schema)?;
 
         // assume no page and first root id is 1. I mean of course
-        // TODO: Check if I should use first root id 0
         self.tables.insert(
             name.to_string(),
             Table::new(schema, 0, header_size, Box::new(file), 0),
         );
-        Ok(())
+
+        Ok(()) // NOTE: don't have to insert any page, will do that when insert first row
     }
 
     /// Flush change that happen to the underline file
-    pub fn flush(&self, name: &str) {
-        println!("flush table {name}");
+    pub fn flush(&mut self, name: &str) -> Result<(), EngineErr> {
+        let path = self.get_table_file_path(name);
+        let file = fs::File::options()
+            .write(true)
+            .create(false)
+            .truncate(false)
+            .open(path)
+            .map_err(|_| TableNotFound(name.to_string()))?;
+
+        self.tables
+            .get_mut(name)
+            .ok_or(TableNotFound(name.to_string()))?
+            .flush(Box::new(file))
     }
 
     /// Insert row to target table with provided information
@@ -72,15 +84,36 @@ impl StorageEngine {
             self.tables
                 .insert(table_name.to_string(), Table::try_from_src(file)?);
         }
-        self.tables.get_mut(table_name).unwrap().insert_row(data);
+        return self.tables.get_mut(table_name).unwrap().insert_row(data);
+    }
 
-        return Ok(());
+    /// Return Iterator of each row data
+    pub fn get_all_rows(&mut self, table_name: &str) -> Result<RowCursor, EngineErr> {
+        let table = self
+            .tables
+            .get_mut(table_name)
+            .ok_or(EngineErr::TableNotFound(table_name.to_string()))?;
+        Ok(table.get_all_rows())
     }
 
     /// Find a row with that key, returns None if row not found
-    pub fn find_row_by_key(key: KeyData) -> Option<RowData> {
-        // TODO:
-        return None;
+    pub fn find_row_by_key(
+        &mut self,
+        table_name: &str,
+        key: KeyData,
+    ) -> Result<Option<RowData>, EngineErr> {
+        let table = self
+            .tables
+            .get_mut(table_name)
+            .ok_or(EngineErr::TableNotFound(table_name.to_string()))?;
+        Ok(table.find_row_by_key(key))
+    }
+
+    /// Return file path that the table supposed to be
+    fn get_table_file_path(&self, table_name: &str) -> PathBuf {
+        self.root_dir
+            .join(table_name)
+            .with_extension(TABLE_FILE_EXTENSION)
     }
 
     //
