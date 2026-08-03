@@ -9,7 +9,7 @@ use std::{
 
 use crate::storage::{
     EngineErr::{self, *},
-    PAGE_SIZE,
+    PAGE_HEADER_SIZE, PAGE_SIZE,
     node::Page,
 };
 
@@ -24,7 +24,7 @@ impl<T: Read + Write + Seek> TableSrc for T {}
 // TODO: evict policy
 pub struct Pager {
     cache: HashMap<u32, Page>,
-    src: Box<dyn TableSrc>,
+    pub src: Box<dyn TableSrc>,
     num_pages: u32,     // current number of pages in the file (not cache)
     header_size: usize, // file's header size
 }
@@ -55,10 +55,13 @@ impl Pager {
             // Page exists but not on cache
             // read from src
             let mut buffer = [0u8; PAGE_SIZE];
-            self.src.seek(SeekFrom::Start(self.node_offset(id))).ok()?;
-            self.src.read_exact(&mut buffer).ok()?;
+            self.src
+                .seek(SeekFrom::Start(self.node_offset(id)))
+                .unwrap();
+            self.src.read_exact(&mut buffer).unwrap();
+
             // save to cache
-            self.cache.insert(id, Page::new(false, buffer));
+            self.cache.insert(id, Page::new_from_buffer(false, buffer));
         }
 
         self.cache.get(&id)
@@ -78,19 +81,17 @@ impl Pager {
             self.src.seek(SeekFrom::Start(self.node_offset(id))).ok()?;
             self.src.read_exact(&mut buffer).ok()?;
             // save to cache
-            self.cache.insert(id, Page::new(false, buffer));
+            self.cache.insert(id, Page::new_from_buffer(false, buffer));
         }
 
         self.cache.get_mut(&id)
     }
 
     /// Allocates new page with header, update its metadata and return it
-    pub fn new_page(&mut self) -> &Page {
+    pub fn new_page(&mut self, is_leaf: bool, is_root: bool) -> &Page {
         // create new page with new id
-        let mut page = Page::new(true, [0u8; PAGE_SIZE]);
         let new_id = self.num_pages;
-        page.set_is_page();
-        page.set_id(new_id);
+        let page = Page::new(true, new_id, is_leaf, is_root);
 
         // add to cache
         self.cache.insert(new_id, page);
@@ -102,12 +103,10 @@ impl Pager {
     }
 
     /// Allocates new page with header, update its metadata and return it in mutable
-    pub fn new_page_mut(&mut self) -> &mut Page {
+    pub fn new_page_mut(&mut self, is_leaf: bool, is_root: bool) -> &mut Page {
         // create new page with new id
-        let mut page = Page::new(true, [0u8; PAGE_SIZE]);
         let new_id = self.num_pages;
-        page.set_is_page();
-        page.set_id(new_id);
+        let page = Page::new(true, new_id, is_leaf, is_root);
 
         // add to cache
         self.cache.insert(new_id, page);
@@ -115,10 +114,10 @@ impl Pager {
         // update num_pages
         self.num_pages += 1;
         // return new page
-        return self.cache.get_mut(&(self.num_pages - 1)).unwrap();
+        return self.cache.get_mut(&new_id).unwrap();
     }
 
-    /// Flush page by id, only flush if diry
+    /// Flush page by id, only flush if dirty
     pub fn flush_by_id(&mut self, id: u32) -> Result<(), EngineErr> {
         if !self.cache.contains_key(&id) {
             return Err(PageNotExists(id));
@@ -164,7 +163,7 @@ impl Pager {
     /// Registers new page into pager and return its assigned ID
     pub fn reg_page(&mut self, mut page: Page) -> u32 {
         let new_id = self.num_pages;
-        page.set_is_page();
+        page.set_is_page(true);
         page.set_id(new_id);
 
         // add to cache
@@ -178,25 +177,18 @@ impl Pager {
 
     /// Register the page to pager using target id
     /// NOTE: this method will override the page with target id if exists
+    /// Requires: only call this after using take_page(id) to take it
     pub fn reg_page_with_id(&mut self, mut page: Page, id: u32) {
-        page.set_is_page();
+        page.set_is_page(true);
         page.set_id(id);
 
         // add to cache
         self.cache.insert(id, page);
-
-        // update num_pages
-        self.num_pages += 1;
     }
 
     /// Take ownership of the page with target id
+    /// Requires: the caller must register it back using reg_page_with_id(id)
     pub fn take_page(&mut self, id: u32) -> Option<Page> {
-        match self.cache.remove(&id) {
-            None => None,
-            Some(x) => {
-                self.num_pages -= 1;
-                Some(x)
-            }
-        }
+        self.cache.remove(&id)
     }
 }

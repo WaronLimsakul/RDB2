@@ -18,6 +18,8 @@ const TABLE_FILE_EXTENSION: &str = "rdb";
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_MAGIC_NUMBER: [u8; 4] = [0x50, 0x41, 0x47, 0x45]; // "PAGE"
+const FOUR_BYTES_ZERO: [u8; 4] = [0u8; 4];
+const PAGE_HEADER_SIZE: usize = 23;
 
 const MAX_RECORD_SIZE: usize = PAGE_SIZE / 8;
 
@@ -266,7 +268,7 @@ impl Display for EngineErr {
 impl std::error::Error for EngineErr {}
 
 /// Record Data := Represent the row data except key
-struct RecData {
+pub struct RecData {
     vals: Vec<ColData>,
 }
 

@@ -30,6 +30,10 @@
 //! | Ulong| 8 bytes big-endian `u64` |
 //! | String | 2 bytes length (`u16`) + UTF-8 bytes |
 //! | Bool | 1 byte (0 or 1) |
+//!
+//! NOTE: if change the format, please change
+//! 1. Table::try_from_src
+//! 2. Table::write_header
 
 use std::io::{BufReader, Read, SeekFrom, Write};
 
@@ -110,6 +114,7 @@ impl Table {
     pub fn try_from_src<T: TableSrc + 'static>(reader: T) -> Result<Self, EngineErr> {
         let mut br = BufReader::new(reader);
 
+        // check magic number
         let mut magic = [0u8; 8];
         br.read_exact(magic.as_mut_slice())
             .map_err(|e| FsErr(Box::new(e)))?;
@@ -117,17 +122,17 @@ impl Table {
             return Err(InvalidMagicNumber);
         }
 
+        // read num pages
+        let num_pages = read_u32(&mut br)?;
+        // read root id
+        let root_id = read_u32(&mut br)?;
+
+        // read num columns
         let num_cols = read_u64(&mut br)?;
         let mut schema = TableSchema {
             key: (String::new(), KeyType::Uint), // place holder
             vals: Vec::with_capacity(num_cols),
         };
-
-        // read num pages
-        let num_pages = read_u32(&mut br)?;
-
-        // read root id
-        let root_id = read_u32(&mut br)?;
 
         for i in 0..num_cols {
             let col_name = read_string(&mut br)?;
@@ -145,11 +150,10 @@ impl Table {
             }
         }
 
+        use std::io::Seek;
         // done with the header reading, now check header size
-        // gotta align with inner position first
-        br.seek_relative(0).map_err(|e| FsErr(Box::new(e)))?;
-        let mut src = br.into_inner();
-        let header_size = src.stream_position().map_err(|e| FsErr(Box::new(e)))?;
+        let header_size = br.stream_position().map_err(|e| FsErr(Box::new(e)))?;
+        let src = br.into_inner(); // get TableSrc out
 
         // let pager use underline reader instead
         return Ok(Table {
@@ -195,13 +199,13 @@ impl Table {
     // 2. insert
     // 3. if page full, split
     // requires: for now, not allow row size to exceed MAX_RECORD_SIZE
-    // TODO(overflow): implement overflow page
     pub fn insert_row(&mut self, data: RowData) -> Result<(), EngineErr> {
+        // TODO(overflow): implement overflow page
         assert!(data.size() <= MAX_RECORD_SIZE);
 
         // insert a page if table empty
         if self.pager.num_pages() == 0 {
-            let root = self.pager.new_page();
+            let root = self.pager.new_page(true, true);
             self.root_id = root.id();
         }
 
@@ -240,10 +244,11 @@ impl Table {
     }
 
     /// Flush all the change that happen to table to disk
-    pub fn flush(&mut self, mut table_src: Box<dyn TableSrc>) -> Result<(), EngineErr> {
+    pub fn flush(&mut self) -> Result<(), EngineErr> {
         // TODO(minor): may consider having num_pages_changed and root_node_changed fields
         let num_pages = self.pager.num_pages();
         let root_node_id = self.root_id;
+        let table_src = &mut self.pager.src;
 
         table_src
             .seek(SeekFrom::Start(OFF_TABLE_NUM_PAGES as u64))
@@ -291,13 +296,34 @@ impl Table {
     /// 2. Transfer half elements of old node to it
     /// 3. Add first key and pointer (of new node) to parent
     fn split_insert_leaf(&mut self, path: Vec<u32>, data: RowData) -> Result<(), EngineErr> {
-        let target_id = path.last().unwrap();
-        let new_page_id = self.split_page(*target_id)?;
-        let new_page = self.pager.page_mut(new_page_id).unwrap();
-        new_page
-            .insert_cell(data.key, CellValue::Leaf(&data.vals.to_bytes()))
-            .unwrap(); // shouldn't be page full right?
-        let new_page_first_key = new_page.cell(0).key();
+        let target_id = *path.last().unwrap();
+        debug_assert!(self.pager.page(target_id).unwrap().is_leaf());
+        let (new_page_id, new_page_first_key) = self.split_page(target_id, true)?;
+        let old_page_last_key = self
+            .pager
+            .page(target_id)
+            .unwrap()
+            .last_cell()
+            .unwrap()
+            .key();
+
+        if data.key == new_page_first_key || data.key == old_page_last_key {
+            return Err(RowExists(data.key));
+        }
+
+        // Decide which node to insert to
+        // Put to right node iff it's more than leftmost row of right node
+        if data.key < new_page_first_key {
+            let old_page = self.pager.page_mut(target_id).unwrap();
+            old_page
+                .insert_cell(data.key, CellValue::Leaf(&data.vals.to_bytes()))
+                .unwrap(); // Shouldn't be page full
+        } else {
+            let new_page = self.pager.page_mut(new_page_id).unwrap();
+            new_page
+                .insert_cell(data.key, CellValue::Leaf(&data.vals.to_bytes()))
+                .unwrap(); // Shouldn't be page full
+        }
         return self.insert_to_parent(path, new_page_first_key, CellValue::Internal(new_page_id));
     }
 
@@ -320,32 +346,85 @@ impl Table {
             "split_insert_internal() called with Leaf CellValue"
         );
         let target_id = *path.last().unwrap();
-        let new_page_id = self.split_page(target_id)?;
+        let (new_page_id, new_page_leftmost_key) = self.split_page(target_id, false)?;
         let new_page = self.pager.page_mut(new_page_id).unwrap();
-        new_page.insert_cell(key, val).unwrap(); // shouldn't be page full right?
-        let new_page_first_key = new_page.cell(0).key();
 
-        return self.insert_to_parent(path, new_page_first_key, CellValue::Internal(new_page_id));
+        // If key to insert is not less than leftmost of new page
+        // then we just insert to new page normally.
+        if key >= new_page_leftmost_key {
+            new_page.insert_cell(key, val).unwrap(); // shouldn't be page full right?
+
+            return self.insert_to_parent(
+                path,
+                new_page_leftmost_key,
+                CellValue::Internal(new_page_id),
+            );
+        } else {
+            // if key < new_page_leftmost_key. Then the key, val we want to insert
+            // is the leftmost child. Must be treated specially.
+            let new_page_lefmost_child_id = new_page.leftmost_child();
+            // set target val to leftmost
+            if let CellValue::Internal(val_u32) = val {
+                new_page.set_leftmost_child(val_u32);
+            }
+            // the thing we think is leftmost is not leftmost anymore
+            // so insert it back normally.
+            new_page
+                .insert_cell(
+                    new_page_leftmost_key,
+                    CellValue::Internal(new_page_lefmost_child_id),
+                )
+                .unwrap(); // shouldn't be page full
+
+            return self.insert_to_parent(path, key, CellValue::Internal(new_page_id));
+        }
     }
 
-    /// Splits a page with given id and return new page id
-    fn split_page(&mut self, id: u32) -> Result<u32, EngineErr> {
+    /// Splits a page with given id and return (new page id, its left most key)
+    /// NOTE:
+    /// 1. split the page equally and bias to left page (left page got more cells)
+    /// 2. have to return leftmost key here because in case it's internal, we won't have the left
+    ///    most key data integrated in there
+    fn split_page(&mut self, id: u32, is_leaf: bool) -> Result<(u32, KeyData), EngineErr> {
+        // Take the left page out of cache so we can modify it easily
         let mut left = self.pager.take_page(id).ok_or(PageNotExists(id))?;
-        let mut right = Page::new(true, [0u8; PAGE_SIZE]);
+        let mut right = Page::new(
+            true, 0, /*place holder id*/
+            is_leaf, false, /*is_root never true*/
+        );
 
         right.set_next_node_id(left.next_node_id());
         // cell index to start copying to right node
-        let start_right = (left.num_cells() + 1) / 2;
+        let mut start_right = (left.num_cells() + 1) / 2;
+        // will be returned
+        let right_node_leftmost_key = left.cell(start_right).key();
 
-        for i in start_right..left.num_cells() {
-            let cell = left.cell(i);
-            right.insert_cell(cell.key(), cell.value()); // know that this won't be page full
-            // because it's just half of the target page
+        // In case its internal, the first cell of right node will be in the left most child header
+        if !is_leaf && let CellValue::Internal(child_id) = left.cell(start_right).value() {
+            right.set_leftmost_child(child_id);
+            start_right += 1; // don't have to transfer this cell anymore
         }
 
+        let mut space_transferred = 0;
+        for i in start_right..left.num_cells() {
+            let cell = left.cell(i);
+            // know that this won't be page full
+            // because it's just half of the target page
+            _ = right.insert_cell(cell.key(), cell.value());
+            space_transferred += cell.size() + 2; // + 2 because the pointer is also freed
+        }
+
+        // Give right page to pager
         let right_id = self.pager.reg_page(right);
+
+        // Update left node metadata
         left.set_next_node_id(right_id);
-        Ok(right_id)
+        left.set_num_cells((left.num_cells() + 1) / 2);
+        left.set_total_free_space(left.total_free_space() + space_transferred as u16);
+        // return left page back
+        self.pager.reg_page_with_id(left, left.id());
+
+        Ok((right_id, right_node_leftmost_key))
     }
 
     /// Helper for split_insert_leaf and split_insert_internal
@@ -361,8 +440,8 @@ impl Table {
             !path.is_empty(),
             "insert_to_parent() called with empty path"
         );
-        let child_id = *path.last().unwrap();
-        let parent_id = path.pop().unwrap();
+
+        let child_id = path.pop().unwrap();
 
         if path.is_empty() {
             debug_assert!(
@@ -372,13 +451,15 @@ impl Table {
             // unroot the old root
             self.pager.page_mut(child_id).unwrap().set_is_root(false);
             // create a new internal node root
-            let root = self.pager.new_page_mut();
+            let root = self.pager.new_page_mut(false, true);
+            // new root's leftmost child is the old root
+            root.set_leftmost_child(child_id);
             // set root
             self.root_id = root.id();
-            root.set_is_root(true);
             // insert
             return root.insert_cell(key, val);
         } else {
+            let parent_id = *path.last().unwrap();
             let parent = self.pager.page_mut(parent_id).unwrap();
             let val_backup = val.clone();
             return match parent.insert_cell(key, val) {
@@ -431,30 +512,4 @@ fn read_string<R: Read>(reader: &mut R) -> Result<String, EngineErr> {
         .read_exact(str_bytes.as_mut_slice())
         .map_err(|e| FsErr(Box::new(e)))?;
     String::from_utf8(str_bytes).map_err(|_| InvalidUtf8)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // TODO: rewrite this test
-    // #[test]
-    // fn test_read_write_header() {
-    //     let schema = TableSchema {
-    //         key: ("id".to_string(), KeyType::Ulong),
-    //         vals: vec![
-    //             ("name".to_string(), Type::String),
-    //             ("age".to_string(), Type::Uint),
-    //             ("retired".to_string(), Type::Bool),
-    //         ],
-    //     };
-    //
-    //     // test writing normal header
-    //     let mut buf: Vec<u8> = Vec::new();
-    //     write_header(&mut buf, &schema).expect("Test write failed");
-    //
-    //     // test reading the header
-    //     let res = read_table_header(buf.as_slice()).expect("Test read failed");
-    //     assert_eq!(res, schema);
-    // }
 }

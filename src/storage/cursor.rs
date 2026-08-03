@@ -36,11 +36,8 @@ impl Iterator for Cursor<'_> {
                 "Cursor::next(): provided initial page is not root"
             ); // requires this to be root
             while !page.is_leaf() {
-                if let CellValue::Internal(child_id) = page.cell(0).value() {
-                    page = self.pager.page(child_id)?;
-                } else {
-                    panic!("Cursor::next(): Internal node shouldn't have leaf cell value");
-                }
+                let leftmost_child_id = page.leftmost_child();
+                page = self.pager.page(leftmost_child_id)?;
             }
             self.page_id = page.id();
             self.init = true;

@@ -18,6 +18,12 @@
 //! | 0      | 1    | key_size (`u8`, must be 4 or 8) |
 //! | 1      | 4    | child_ptr (`u32`, node ID to traverse to) |
 //! | 5      | ks   | Key bytes (`KeyData::to_bytes`, ks = key_size) |
+//!
+//! NOTE: if change key_size and val_size: please change
+//! 1. CellValue impl
+//! 2. Cell impl
+//! 3. Page::cell_no_check()
+//! 4. Page::insert_cell()
 
 use crate::storage::KeyData;
 
@@ -50,6 +56,7 @@ impl<'a> Cell<'a> {
     pub fn new(buffer: &'a [u8], is_leaf: bool) -> Self {
         Self { buffer, is_leaf }
     }
+
     /// Creates cell from key and value
     // TODO: can have write_to_slice, that just write all this to slice
     // they provided directly
@@ -79,6 +86,13 @@ impl<'a> Cell<'a> {
         }
     }
 
+    // Get the new copy bytes representation of the cell
+    pub fn get_buffer(&self) -> Vec<u8> {
+        let mut res: Vec<u8> = Vec::new();
+        res.extend_from_slice(self.buffer);
+        return res;
+    }
+
     /// Returns value according to node type it is in
     /// - Internal: id of node you can traverse
     /// - Leaf: record data in BYTES (cell doesn't know the schema so it's
@@ -89,7 +103,7 @@ impl<'a> Cell<'a> {
             CellValue::Leaf(record_bytes)
         } else {
             // the "value" in the internal node entry is just child ptr
-            let child_ptr = u32::from_be_bytes(self.buffer[2..6].try_into().unwrap());
+            let child_ptr = u32::from_be_bytes(self.buffer[1..5].try_into().unwrap());
             CellValue::Internal(child_ptr)
         }
     }
@@ -103,7 +117,7 @@ impl<'a> Cell<'a> {
     }
 
     /// Returns its size in bytes
-    fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.buffer.len()
     }
 
