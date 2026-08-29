@@ -56,6 +56,14 @@ impl StorageEngine {
         Ok(()) // NOTE: don't have to insert any page, will do that when insert first row
     }
 
+    /// Flush all tables that engine has processed in this session
+    pub fn flush_all(&mut self) -> Result<(), EngineErr> {
+        for (_, table) in &mut self.tables {
+            table.flush()?;
+        }
+        return Ok(());
+    }
+
     /// Flush change that happen to the underline file
     pub fn flush(&mut self, name: &str) -> Result<(), EngineErr> {
         self.tables
@@ -80,8 +88,6 @@ impl StorageEngine {
                 .truncate(false)
                 .open(&path)
                 .map_err(|_| TableNotFound(table_name.to_string()))?;
-            let metadata = file.metadata().map_err(|e| FsErr(Box::new(e)))?;
-            let len = metadata.len();
 
             self.tables
                 .insert(table_name.to_string(), Table::try_from_src(Box::new(file))?);
@@ -90,26 +96,48 @@ impl StorageEngine {
     }
 
     /// Return Iterator of each row data
-    /// TODO NOW: read from if table not found
     pub fn get_all_rows(&mut self, table_name: &str) -> Result<RowCursor, EngineErr> {
-        let table = self
-            .tables
-            .get_mut(table_name)
-            .ok_or(EngineErr::TableNotFound(table_name.to_string()))?;
+        // If table not in engine yet, read from the file
+        if !self.tables.contains_key(table_name) {
+            let path = self.get_table_file_path(table_name);
+            let file = fs::File::options()
+                .read(true)
+                .write(true)
+                .create(false)
+                .truncate(false)
+                .open(&path)
+                .map_err(|_| TableNotFound(table_name.to_string()))?;
+
+            self.tables
+                .insert(String::from(table_name), Table::try_from_src(file)?);
+        }
+
+        let table = self.tables.get_mut(table_name).unwrap();
         Ok(table.get_all_rows())
     }
 
     /// Find a row with that key, returns None if row not found
-    /// TODO NOW: read from if table not found
     pub fn find_row_by_key(
         &mut self,
         table_name: &str,
         key: KeyData,
     ) -> Result<Option<RowData>, EngineErr> {
-        let table = self
-            .tables
-            .get_mut(table_name)
-            .ok_or(EngineErr::TableNotFound(table_name.to_string()))?;
+        // If table not in engine yet, read from the file
+        if !self.tables.contains_key(table_name) {
+            let path = self.get_table_file_path(table_name);
+            let file = fs::File::options()
+                .read(true)
+                .write(true)
+                .create(false)
+                .truncate(false)
+                .open(&path)
+                .map_err(|_| TableNotFound(table_name.to_string()))?;
+
+            self.tables
+                .insert(String::from(table_name), Table::try_from_src(file)?);
+        }
+
+        let table = self.tables.get_mut(table_name).unwrap();
         Ok(table.find_row_by_key(key))
     }
 

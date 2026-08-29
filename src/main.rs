@@ -1,20 +1,19 @@
-use crate::storage::{KeyType, engine::StorageEngine, table::TableSchema};
+use crate::{execution::ExecErr, interface::repl};
 
+mod execution;
+mod interface;
 mod storage;
 
 fn main() {
-    println!("Aight, let's get started");
-    let mut engine = StorageEngine::new("./db/").unwrap();
-
-    match engine.new_table(
-        "test4",
-        TableSchema {
-            key: (String::from("id"), KeyType::Ulong),
-            vals: vec![],
-        },
-    ) {
-        Ok(_) => println!("Done"),
-        Err(err) => println!("new_table: {err}"),
-    };
-    engine.flush("test");
+    // TODO: input user selected root dir
+    let mut engine = storage::engine::StorageEngine::new(".rdb").unwrap();
+    loop {
+        let input = repl::get_input();
+        match execution::execute(input, &mut engine) {
+            Err(ExecErr::Storage(e)) => {
+                repl::output(&format!("Storage engine error: {}", e));
+            }
+            Ok(_) => {} // TODO: print result when support query
+        }
+    }
 }

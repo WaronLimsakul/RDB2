@@ -13,6 +13,8 @@ pub mod table;
 use EngineErr::*;
 use std::{error::Error, fmt::Display};
 
+use crate::storage::engine::StorageEngine;
+
 const TABLE_MAGIC_NUMBER: [u8; 8] = [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef];
 const TABLE_FILE_EXTENSION: &str = "rdb";
 
