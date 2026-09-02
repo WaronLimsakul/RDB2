@@ -1,5 +1,5 @@
 use crate::{
-    interface::{Cmd, CmdType},
+    interface::Cmd,
     storage::{EngineErr, engine::StorageEngine},
 };
 
@@ -11,11 +11,15 @@ pub enum ExecErr {
 
 // TODO: Ok can be cursor or something interface should shows
 pub fn execute(cmd: Cmd, engine: &mut StorageEngine) -> Result<(), ExecErr> {
-    match cmd.cmd_type {
-        CmdType::Meta(meta_cmd) => {
+    match cmd {
+        Cmd::Meta {
+            cmd: meta_cmd,
+            raw: _,
+        } => {
             meta::execute(meta_cmd, engine).map_err(|e| ExecErr::Storage(e))?;
         }
-        _ => {} // TODO: handle other input
+        _ => {} // TODO NOW: handle other input
+                // Especially checking data type against schema
     }
     return Ok(());
 }

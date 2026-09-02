@@ -1,11 +1,18 @@
 use std::io::Write;
 
-use crate::interface::{Cmd, CmdType, MetaCmd};
+use crate::interface::{
+    Cmd, MetaCmd,
+    parser::{ParseErr, Parser, Stmt},
+};
 
-pub fn get_input() -> Cmd {
+/// The the parse input from the raw user input
+/// NOTE: the parse tree doesn't know the catalog. Caller must
+/// check the correctness of the mentioned table/col name/type
+pub fn get_input() -> Result<Cmd, ParseErr> {
     let raw = get_raw_input();
 
-    let cmd_type = if raw.chars().nth(0).unwrap() == '.' {
+    // Metacommand case
+    if raw.chars().nth(0).unwrap() == '.' {
         let meta_cmd = match &raw[1..] {
             "quit" => MetaCmd::Quit,
             "exit" => MetaCmd::Quit,
@@ -14,12 +21,28 @@ pub fn get_input() -> Cmd {
             } // TODO: handle it better
         };
 
-        CmdType::Meta(meta_cmd)
-    } else {
-        CmdType::DQL // TODO: parse it seriously here
+        return Ok(Cmd::Meta { cmd: meta_cmd, raw });
+    }
+
+    // Query case
+    let mut parser = Parser::new(raw.as_str());
+    let ast = parser.parse()?;
+    let cmd = match &ast.root {
+        Stmt::Select {
+            table: _,
+            columns: _,
+        } => Cmd::DQL { ast, raw },
+        Stmt::Insert {
+            table: _,
+            values: _,
+        } => Cmd::DML { ast, raw },
+        Stmt::New {
+            table: _,
+            schema: _,
+        } => Cmd::DDL { ast, raw },
     };
 
-    return Cmd { cmd_type, raw };
+    return Ok(cmd);
 }
 
 pub fn get_raw_input() -> String {

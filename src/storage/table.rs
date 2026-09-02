@@ -54,8 +54,22 @@ pub struct TableSchema {
 }
 
 impl TableSchema {
-    fn num_cols(&self) -> usize {
-        1 + self.vals.len()
+    /// New empty table schema
+    pub fn new() -> Self {
+        TableSchema {
+            key: ("".to_string(), KeyType::Uint),
+            vals: Vec::new(),
+        }
+    }
+
+    /// Set new key name and type
+    pub fn set_key(&mut self, name: String, key_type: KeyType) {
+        self.key = (name, key_type);
+    }
+
+    /// Add value type
+    pub fn add_val_type(&mut self, name: String, col_type: Type) {
+        self.vals.push((name, col_type));
     }
 
     /// Decoder raw bytes to RecData using the schema
@@ -69,6 +83,25 @@ impl TableSchema {
             offset += n_bytes_read;
         }
         Ok(RecData { vals })
+    }
+
+    /// Get column type from column name
+    pub fn get_type(&self, col: &str) -> Option<Type> {
+        if col == self.key.0 {
+            return Some(self.key.1.into());
+        }
+
+        for (c, t) in self.vals.iter() {
+            if c == col {
+                return Some(t.clone());
+            }
+        }
+
+        return None;
+    }
+
+    fn num_cols(&self) -> usize {
+        1 + self.vals.len()
     }
 }
 
@@ -101,6 +134,11 @@ impl Table {
             root_id,
             pager: Pager::new(table_src, num_pages, header_size),
         }
+    }
+
+    /// Return table's schema
+    pub fn schema(&self) -> &TableSchema {
+        return &self.schema;
     }
 
     /// Create a table by reading metadata from the reader
