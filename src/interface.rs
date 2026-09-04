@@ -5,6 +5,7 @@ pub mod parser;
 pub mod printer;
 pub mod repl;
 
+/// All types of command user can do in RDB2
 pub enum Cmd {
     // TODO: consider remove raw if no one's gonna use it
     Meta { cmd: MetaCmd, raw: String },
@@ -15,4 +16,17 @@ pub enum Cmd {
 
 pub enum MetaCmd {
     Quit,
+}
+
+const LOGO: &str = r#"
+    ____              ____  ____ ___ 
+   / __ \____  ____  / __ \/ __ )__ \
+  / /_/ / __ \/ __ \/ / / / __  |_/ /
+ / _, _/ /_/ / / / / /_/ / /_/ / __/ 
+/_/ |_|\____/_/ /_/_____/_____/____/
+"#;
+
+/// Print a welcome message
+pub fn welcome() {
+    repl::output(LOGO);
 }

@@ -7,6 +7,7 @@ mod interface;
 mod storage;
 
 fn main() {
+    interface::welcome();
     // TODO: input user selected root dir
     let mut engine = storage::engine::StorageEngine::new(".rdb").unwrap();
     loop {

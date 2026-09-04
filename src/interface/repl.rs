@@ -46,8 +46,10 @@ pub fn get_input() -> Result<Cmd, ParseErr> {
     Ok(cmd)
 }
 
+const PROMPT_SYMBOL: &str = "» ";
+
 pub fn get_raw_input() -> String {
-    print!(">> ");
+    print!("{PROMPT_SYMBOL}");
     std::io::stdout().flush().unwrap();
 
     let mut input = String::new();

@@ -19,7 +19,8 @@ pub enum ExecErr {
     UnmatchedNumValues(usize, usize), // Expect <first usize> values, user provides <second usize> values,
 }
 
-// TODO: Ok can be cursor or something interface should shows
+/// Execute non-metadata command
+/// Effect: output something if succeed
 pub fn execute(cmd: Cmd, engine: &mut StorageEngine) -> Result<(), ExecErr> {
     match cmd {
         Cmd::Meta {
