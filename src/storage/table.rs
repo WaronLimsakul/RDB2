@@ -217,13 +217,13 @@ impl Table {
 
         // key column data
         bytes.extend_from_slice(&str_len(&schema.key.0)?);
-        bytes.extend_from_slice(&schema.key.0.as_bytes());
+        bytes.extend_from_slice(schema.key.0.as_bytes());
         bytes.push(Type::from(schema.key.1).to_byte());
 
         // value column data
         for (col_name, t) in schema.vals.iter() {
             bytes.extend_from_slice(&str_len(col_name)?);
-            bytes.extend_from_slice(&col_name.as_bytes());
+            bytes.extend_from_slice(col_name.as_bytes());
             bytes.push(t.to_byte());
         }
 
@@ -391,11 +391,11 @@ impl Table {
         if key >= new_page_leftmost_key {
             new_page.insert_cell(key, val).unwrap(); // shouldn't be page full right?
 
-            return self.insert_to_parent(
+            self.insert_to_parent(
                 path,
                 new_page_leftmost_key,
                 CellValue::Internal(new_page_id),
-            );
+            )
         } else {
             // if key < new_page_leftmost_key. Then the key, val we want to insert
             // is the leftmost child. Must be treated specially.
@@ -413,7 +413,7 @@ impl Table {
                 )
                 .unwrap(); // shouldn't be page full
 
-            return self.insert_to_parent(path, key, CellValue::Internal(new_page_id));
+            self.insert_to_parent(path, key, CellValue::Internal(new_page_id))
         }
     }
 
@@ -494,22 +494,22 @@ impl Table {
             // set root
             self.root_id = root.id();
             // insert
-            return root.insert_cell(key, val);
+            root.insert_cell(key, val)
         } else {
             let parent_id = *path.last().unwrap();
             let parent = self.pager.page_mut(parent_id).unwrap();
             let val_backup = val.clone();
-            return match parent.insert_cell(key, val) {
+            match parent.insert_cell(key, val) {
                 Err(EngineErr::PageFull) => self.split_insert_internal(path, key, val_backup),
                 Err(err) => Err(err),
                 _ => Ok(()),
-            };
+            }
         }
     }
 }
 
 /// return length of string in u16
-fn str_len(s: &String) -> Result<[u8; 2], EngineErr> {
+fn str_len(s: &str) -> Result<[u8; 2], EngineErr> {
     let data = u16::try_from(s.len()).map_err(|_| InvalidStrLenght)?;
     Ok(data.to_be_bytes())
 }

@@ -246,15 +246,15 @@ impl<'a> Lexer<'a> {
 
     /// Scan and return numeric token
     fn scan_numeric(&mut self) -> Result<Token, LexErr> {
-        debug_assert!(matches!(self.cur_char().unwrap(), '0'..='9'));
+        debug_assert!(self.cur_char().unwrap().is_ascii_digit());
 
         // Scan numbers, only allow 1 dot. That's it.
         let mut dotted = false;
 
         let start = self.cursor;
         while let Some(ch) = self.cur_char() {
-            if matches!(ch, '0'..='9') {
-                self.cursor += 1; // '0' - '9' takes 1 byte
+            if ch.is_ascii_digit() {
+                self.cursor += 1; // ASCII takes 1 byte
             } else if ch == '.' && !dotted {
                 dotted = true;
                 self.cursor += 1; // '.' takes 1 byte

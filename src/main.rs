@@ -17,11 +17,9 @@ fn main() {
                 continue;
             }
         };
-        match execution::execute(input, &mut engine) {
-            Err(e) => {
-                repl::output(&format!("Error: {}", e));
-            }
-            Ok(_) => {} // TODO: print result when support query
+        // If error occurs, just print
+        if let Err(e) = execution::execute(input, &mut engine) {
+            repl::output(&format!("Error: {}", e));
         }
     }
 }

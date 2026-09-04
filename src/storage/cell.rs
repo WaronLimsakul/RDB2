@@ -72,7 +72,7 @@ impl<'a> Cell<'a> {
                 buffer.extend_from_slice(&val_size.to_be_bytes());
                 buffer.extend_from_slice(&key.to_bytes());
                 buffer.extend_from_slice(record_bytes);
-                return buffer;
+                buffer
             }
 
             Internal(ptr) => {
@@ -81,7 +81,7 @@ impl<'a> Cell<'a> {
                 buffer.push(key_size);
                 buffer.extend_from_slice(&ptr.to_be_bytes());
                 buffer.extend_from_slice(&key.to_bytes());
-                return buffer;
+                buffer
             }
         }
     }
@@ -90,7 +90,7 @@ impl<'a> Cell<'a> {
     pub fn get_buffer(&self) -> Vec<u8> {
         let mut res: Vec<u8> = Vec::new();
         res.extend_from_slice(self.buffer);
-        return res;
+        res
     }
 
     /// Returns value according to node type it is in

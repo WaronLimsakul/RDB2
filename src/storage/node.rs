@@ -308,11 +308,11 @@ impl Page {
             }
         }
 
-        return if l > 0 {
+        if l > 0 {
             l - 1
         } else {
             LEFTMOST_CHILD_CELL_IDX
-        };
+        }
     }
 
     /// Find pointer position from provided id. The pointer point to
@@ -345,9 +345,9 @@ impl Page {
 
         // know from debug_assert that it should be Internal
         if ptr == LEFTMOST_CHILD_CELL_IDX {
-            return self.leftmost_child();
+            self.leftmost_child()
         } else if let CellValue::Internal(val) = self.cell(ptr).value() {
-            return val;
+            val
         } else {
             panic!("Shouldn't happen.");
         }

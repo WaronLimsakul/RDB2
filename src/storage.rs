@@ -178,7 +178,7 @@ impl ColData {
                 let len = u16::try_from(s.len()).unwrap();
                 let mut buffer = Vec::with_capacity(2 + s.len());
                 buffer.extend_from_slice(&len.to_be_bytes());
-                buffer.extend_from_slice(&s.as_bytes());
+                buffer.extend_from_slice(s.as_bytes());
                 buffer
             }
             Bool(true) => vec![1u8],
@@ -197,7 +197,7 @@ impl ColData {
             String(s) => {
                 let len = u16::try_from(s.len()).unwrap();
                 v.extend_from_slice(&len.to_be_bytes());
-                v.extend_from_slice(&s.as_bytes());
+                v.extend_from_slice(s.as_bytes());
             }
             Bool(true) => v.push(1u8),
             Bool(false) => v.push(0u8),
@@ -207,7 +207,15 @@ impl ColData {
 
 impl Display for ColData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        use ColData::*;
+        match self {
+            Int(v) => write!(f, "{v}"),
+            Uint(v) => write!(f, "{v}"),
+            Long(v) => write!(f, "{v}"),
+            Ulong(v) => write!(f, "{v}"),
+            String(v) => write!(f, "{v}"),
+            Bool(v) => write!(f, "{v}"),
+        }
     }
 }
 

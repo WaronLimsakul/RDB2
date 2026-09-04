@@ -12,7 +12,7 @@ pub fn get_input() -> Result<Cmd, ParseErr> {
     let raw = get_raw_input();
 
     // Metacommand case
-    if raw.chars().nth(0).unwrap() == '.' {
+    if raw.chars().next().unwrap() == '.' {
         let meta_cmd = match &raw[1..] {
             "quit" => MetaCmd::Quit,
             "exit" => MetaCmd::Quit,
