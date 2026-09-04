@@ -33,7 +33,7 @@ pub enum Stmt {
 
 #[derive(Debug, PartialEq)]
 pub struct TableNode {
-    name: String,
+    pub name: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -44,13 +44,13 @@ pub enum ColumnList {
 
 #[derive(Debug, PartialEq)]
 pub struct ColumnNode {
-    name: String,
+    pub name: String,
 }
 
 // Row value provided in "insert" statement
 #[derive(Debug, PartialEq)]
 pub struct RowValueNode {
-    values: Vec<ExprNode>,
+    pub values: Vec<ExprNode>,
 }
 
 // Reprent any expression for row value (for now)
@@ -107,7 +107,7 @@ impl<'a> Parser<'a> {
             }
         };
 
-        return Ok(ParseTree { root });
+        Ok(ParseTree { root })
     }
 
     // Grammar: select <col1>, <col2>, ... from table
@@ -142,7 +142,7 @@ impl<'a> Parser<'a> {
             table,
             columns: column_list,
         };
-        return Ok(select);
+        Ok(select)
     }
 
     // Grammar:
@@ -183,7 +183,7 @@ impl<'a> Parser<'a> {
             table,
             values: val_node,
         };
-        return Ok(insert);
+        Ok(insert)
     }
 
     // Grammar:
@@ -210,7 +210,7 @@ impl<'a> Parser<'a> {
         }
 
         let stmt = Stmt::New { table, schema };
-        return Ok(stmt);
+        Ok(stmt)
     }
 
     // Grammar:
@@ -234,7 +234,7 @@ impl<'a> Parser<'a> {
             self.next_token()?; // pop the comma
         }
 
-        return Ok(ColumnList::Listed(column_list));
+        Ok(ColumnList::Listed(column_list))
     }
 
     // Grammar: just `<col_name>`
@@ -251,7 +251,7 @@ impl<'a> Parser<'a> {
         let col_node = ColumnNode {
             name: col_name.content,
         };
-        return Ok(col_node);
+        Ok(col_node)
     }
 
     // Grammar: just `<table_name>`
@@ -265,7 +265,7 @@ impl<'a> Parser<'a> {
         let node = TableNode {
             name: table_token.content,
         };
-        return Ok(node);
+        Ok(node)
     }
 
     // Grammar: [<row_value_1>, <row_value_2>, ...]
@@ -292,7 +292,7 @@ impl<'a> Parser<'a> {
             return Err(ParseErr::Expect("]", rbrak.content));
         }
 
-        return Ok(value_list);
+        Ok(value_list)
     }
 
     // Grammar: (v1, v2, ...)
@@ -318,7 +318,7 @@ impl<'a> Parser<'a> {
             return Err(ParseErr::Expect(")", lparen.content));
         }
 
-        return Ok(RowValueNode { values: vals });
+        Ok(RowValueNode { values: vals })
     }
 
     // Grammar: just literal value for now
@@ -377,7 +377,7 @@ impl<'a> Parser<'a> {
             };
         }
 
-        return Ok(node);
+        Ok(node)
     }
 
     // Grammar: { <c1> : <t1> primary, <c2> : <t2>, ... }`
@@ -439,7 +439,7 @@ impl<'a> Parser<'a> {
             return Err(ParseErr::Expect("}", rbrace.content));
         }
 
-        return Ok(schema);
+        Ok(schema)
     }
 
     // Allowed types: `int`, `uint`, `long`, `ulong`, `bool`, `string`
@@ -463,7 +463,7 @@ impl<'a> Parser<'a> {
             }
         };
 
-        return Ok(col_type);
+        Ok(col_type)
     }
 
     // Helper for peeking next token from lexer. Return error if none found
@@ -506,6 +506,12 @@ impl fmt::Display for ParseErr {
                 t
             ),
         }
+    }
+}
+
+impl fmt::Display for LiteralExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self}")
     }
 }
 

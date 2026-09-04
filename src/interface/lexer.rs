@@ -105,7 +105,7 @@ impl<'a> Lexer<'a> {
             self.cur_token = self.next()?;
         }
 
-        return Ok(self.cur_token.as_ref());
+        Ok(self.cur_token.as_ref())
     }
 
     /// Return the next token from the command
@@ -130,7 +130,7 @@ impl<'a> Lexer<'a> {
             _ => return Err(LexErr::InvalidChar(first_char)),
         };
 
-        return Ok(Some(token));
+        Ok(Some(token))
     }
 
     /// Move cursor until found non-whitespace character and
@@ -138,7 +138,7 @@ impl<'a> Lexer<'a> {
     fn skip_whitespace(&mut self) -> Option<char> {
         let skip_len = self.src[self.cursor..].find(|c| !char::is_whitespace(c))?;
         self.cursor += skip_len;
-        return self.cur_char();
+        self.cur_char()
     }
 
     /// Move cursor until found whitespace or end
@@ -150,8 +150,7 @@ impl<'a> Lexer<'a> {
 
         let res = &self.src[self.cursor..self.cursor + move_len];
         self.cursor += move_len;
-
-        return res;
+        res
     }
 
     // Get current character cursor point to
@@ -185,7 +184,7 @@ impl<'a> Lexer<'a> {
 
         self.cursor += string_len + 2;
 
-        return Ok(token);
+        Ok(token)
     }
 
     /// Scan punctuation character and return token
@@ -208,10 +207,10 @@ impl<'a> Lexer<'a> {
         };
 
         self.cursor += 1; // All the punctuation character takes 1 byte
-        return Ok(Token {
+        Ok(Token {
             token_type,
             content: ch.to_string(),
-        });
+        })
     }
 
     /// Scan and return operator token
@@ -242,7 +241,7 @@ impl<'a> Lexer<'a> {
             content: format!("{}", ch).to_string(),
         };
 
-        return Ok(token);
+        Ok(token)
     }
 
     /// Scan and return numeric token
@@ -279,7 +278,7 @@ impl<'a> Lexer<'a> {
             token_type,
             content: self.src[start..self.cursor].to_string(),
         };
-        return Ok(token);
+        Ok(token)
     }
 
     /// Scan current cursor trying to get a snake case word.
@@ -318,7 +317,7 @@ impl<'a> Lexer<'a> {
             content: word.to_string(),
         };
 
-        return Ok(token);
+        Ok(token)
     }
 }
 

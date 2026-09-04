@@ -42,7 +42,7 @@ pub fn get_input() -> Result<Cmd, ParseErr> {
         } => Cmd::DDL { ast, raw },
     };
 
-    return Ok(cmd);
+    Ok(cmd)
 }
 
 pub fn get_raw_input() -> String {
@@ -51,7 +51,7 @@ pub fn get_raw_input() -> String {
 
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).unwrap();
-    return String::from(input.trim_end());
+    String::from(input.trim_end())
 }
 
 pub fn output(msg: &str) {

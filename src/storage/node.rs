@@ -331,7 +331,7 @@ impl Page {
             }
         }
 
-        return l;
+        l
     }
 
     /// Returns id of the node that we suppose to traverse
@@ -369,9 +369,9 @@ impl Page {
             // it can be just close value
             && cell.key() == key
         {
-            return Some(val.to_vec());
+            Some(val.to_vec())
         } else {
-            return None;
+            None
         }
     }
 
@@ -429,15 +429,14 @@ impl Page {
 
         self.set_total_free_space(self.total_free_space() - (total_space_needed as u16));
 
-        return Ok(());
+        Ok(())
     }
 
     /// Compacts the physical layout (get rid of useless gap)
     // 1. Get all the cells in vector?
     // 2. Copy back to node back-to-back?
     fn defragment(&mut self) -> Result<(), EngineErr> {
-        let mut buffer: Vec<Vec<u8>> = Vec::new();
-        buffer.reserve(self.num_cells() as usize);
+        let mut buffer: Vec<Vec<u8>> = Vec::with_capacity(self.num_cells() as usize);
 
         for i in 0..self.num_cells() {
             buffer.push(self.cell(i).get_buffer());
@@ -456,7 +455,7 @@ impl Page {
 
         self.set_space_ptr(cur_space_ptr as u16);
 
-        return Ok(());
+        Ok(())
     }
 
     // TODO: delete and update

@@ -14,12 +14,12 @@ fn main() {
             Ok(cmd) => cmd,
             Err(err) => {
                 repl::output(&format!("Invalid input: {}", err));
-                process::exit(1);
+                continue;
             }
         };
         match execution::execute(input, &mut engine) {
-            Err(ExecErr::Storage(e)) => {
-                repl::output(&format!("Storage error: {}", e));
+            Err(e) => {
+                repl::output(&format!("Error: {}", e));
             }
             Ok(_) => {} // TODO: print result when support query
         }

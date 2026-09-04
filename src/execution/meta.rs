@@ -1,3 +1,8 @@
+//! # Meta Execution
+//!
+//! Main function for executiong meta command
+//!
+
 use std::process;
 
 use crate::{

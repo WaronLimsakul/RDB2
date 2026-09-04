@@ -1,13 +1,12 @@
 # RDB2 Road Map
 
 ## Main 
-- [ ] Storage engine
-- [ ] Execution engine
-- [ ] Request Parser
+- [ ] Insert Execution
+- [ ] Create Table Execution
 - [ ] Server API
 
 ### Storage Engine
-- [ ] Read + Insert
+- [x] Read + Insert
 - [ ] Page overflow
 - [ ] Delete
 - [ ] Update: should just be delete and add if I'm being lazy

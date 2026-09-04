@@ -1,7 +1,7 @@
 use crate::interface::parser::ParseTree;
 
 mod lexer;
-mod parser;
+pub mod parser;
 pub mod repl;
 
 pub enum Cmd {

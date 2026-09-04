@@ -96,11 +96,10 @@ impl TableSchema {
                 return Some(t.clone());
             }
         }
-
-        return None;
+        None
     }
 
-    fn num_cols(&self) -> usize {
+    pub fn num_cols(&self) -> usize {
         1 + self.vals.len()
     }
 }
@@ -138,7 +137,7 @@ impl Table {
 
     /// Return table's schema
     pub fn schema(&self) -> &TableSchema {
-        return &self.schema;
+        &self.schema
     }
 
     /// Create a table by reading metadata from the reader
@@ -194,11 +193,11 @@ impl Table {
         let src = br.into_inner(); // get TableSrc out
 
         // let pager use underline reader instead
-        return Ok(Table {
+        Ok(Table {
             schema,
             root_id,
             pager: Pager::new(Box::new(src), num_pages, header_size as usize),
-        });
+        })
     }
 
     /// Write a table header to a writer. num_pages set to 0.
@@ -304,7 +303,7 @@ impl Table {
             .write(&root_node_id.to_be_bytes())
             .map_err(|e| FsErr(Box::new(e)))?;
 
-        return self.pager.flush();
+        self.pager.flush()
     }
 
     /// Traverse from root to child that contain keydata, or where it should be if inserted.
@@ -362,7 +361,7 @@ impl Table {
                 .insert_cell(data.key, CellValue::Leaf(&data.vals.to_bytes()))
                 .unwrap(); // Shouldn't be page full
         }
-        return self.insert_to_parent(path, new_page_first_key, CellValue::Internal(new_page_id));
+        self.insert_to_parent(path, new_page_first_key, CellValue::Internal(new_page_id))
     }
 
     /// Splits the last node in traverse path and then insert
@@ -512,7 +511,7 @@ impl Table {
 /// return length of string in u16
 fn str_len(s: &String) -> Result<[u8; 2], EngineErr> {
     let data = u16::try_from(s.len()).map_err(|_| InvalidStrLenght)?;
-    return Ok(data.to_be_bytes());
+    Ok(data.to_be_bytes())
 }
 
 /// helper function for reading usize from reader

@@ -16,6 +16,10 @@ impl<'a> RowCursor<'a> {
             schema,
         }
     }
+
+    pub fn schema(&self) -> &TableSchema {
+        self.schema
+    }
 }
 
 impl Iterator for RowCursor<'_> {

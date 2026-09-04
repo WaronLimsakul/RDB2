@@ -59,7 +59,7 @@ impl StorageEngine {
     /// Get schema of the target table
     pub fn get_schema(&mut self, table_name: &str) -> Result<&TableSchema, EngineErr> {
         let table = self.get_table(table_name)?;
-        return Ok(table.schema());
+        Ok(table.schema())
     }
 
     /// Flush all tables that engine has processed in this session
@@ -67,7 +67,7 @@ impl StorageEngine {
         for (_, table) in &mut self.tables {
             table.flush()?;
         }
-        return Ok(());
+        Ok(())
     }
 
     /// Flush change that happen to the underline file
@@ -85,7 +85,7 @@ impl StorageEngine {
     // 3. insert row to node
     pub fn insert_row(&mut self, table_name: &str, data: RowData) -> Result<(), EngineErr> {
         let table = self.get_table_mut(table_name)?;
-        return table.insert_row(data);
+        table.insert_row(data)
     }
 
     /// Return Iterator of each row data
@@ -110,16 +110,16 @@ impl StorageEngine {
         if !self.tables.contains_key(table_name) {
             self.open_table(table_name)?;
         }
-        return Ok(self.tables.get(table_name).unwrap());
+        Ok(self.tables.get(table_name).unwrap())
     }
 
     /// Get mutable table from table name, open the file and read all
     /// the metadata if table is not in cache yet.
-    fn get_table_mut(&mut self, table_name: &str) -> Result<&mut Table, EngineErr> {
+    pub fn get_table_mut(&mut self, table_name: &str) -> Result<&mut Table, EngineErr> {
         if !self.tables.contains_key(table_name) {
             self.open_table(table_name)?;
         }
-        return Ok(self.tables.get_mut(table_name).unwrap());
+        Ok(self.tables.get_mut(table_name).unwrap())
     }
 
     /// Open table's corresponding file, read metadata and save to cache
@@ -138,7 +138,7 @@ impl StorageEngine {
         self.tables
             .insert(String::from(table_name), Table::try_from_src(file)?);
 
-        return Ok(());
+        Ok(())
     }
 
     /// Return file path that the table supposed to be

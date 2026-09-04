@@ -139,7 +139,14 @@ impl TryFrom<Type> for KeyType {
     }
 }
 
+impl Display for KeyType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", Type::from(*self))
+    }
+}
+
 /// Column types with data
+#[derive(Clone, Debug)]
 pub enum ColData {
     Int(i32),
     Uint(u32),
@@ -198,6 +205,12 @@ impl ColData {
     }
 }
 
+impl Display for ColData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
 /// Key type with data
 // NOTE: derived impl says Uint < Ulong
 #[derive(PartialEq, PartialOrd, Debug, Clone, Copy)]
@@ -225,6 +238,26 @@ impl KeyData {
     }
 }
 
+impl From<KeyData> for ColData {
+    fn from(value: KeyData) -> Self {
+        match value {
+            KeyData::Uint(v) => ColData::Uint(v),
+            KeyData::Ulong(v) => ColData::Ulong(v),
+        }
+    }
+}
+
+impl TryFrom<ColData> for KeyData {
+    type Error = EngineErr;
+    fn try_from(value: ColData) -> Result<Self, Self::Error> {
+        match value {
+            ColData::Uint(v) => Ok(KeyData::Uint(v)),
+            ColData::Ulong(v) => Ok(KeyData::Ulong(v)),
+            _ => Err(EngineErr::ValueConversion(value)),
+        }
+    }
+}
+
 /// Error type for engine, just display to see what to wanna say
 #[derive(Debug)]
 pub enum EngineErr {
@@ -241,6 +274,8 @@ pub enum EngineErr {
     RowExists(KeyData),
     PageFull,
     PageNotExists(u32),
+    KeyTypeConversion(Type, KeyType), // Can't convert `Type` to the `KeyType`
+    ValueConversion(ColData),         // Can't convert this `ColData` to whatever
 }
 
 impl Display for EngineErr {
@@ -263,6 +298,8 @@ impl Display for EngineErr {
             PageFull => write!(f, "Page full."),
             PageNotExists(id) => write!(f, "Page id {id} doesn't exists."),
             TableNotFound(table) => write!(f, "Table {table} not found."),
+            KeyTypeConversion(from, to) => write!(f, "Error converting {from} type to {to} type"),
+            ValueConversion(value) => write!(f, "Cannot convert from value {value}"),
         }
     }
 }
@@ -271,7 +308,7 @@ impl std::error::Error for EngineErr {}
 
 /// Record Data := Represent the row data except key
 pub struct RecData {
-    vals: Vec<ColData>,
+    pub vals: Vec<ColData>,
 }
 
 impl RecData {
@@ -290,8 +327,8 @@ impl RecData {
 
 /// Represents a row with data (not just schema)
 pub struct RowData {
-    key: KeyData,
-    vals: RecData,
+    pub key: KeyData,
+    pub vals: RecData,
 }
 
 impl RowData {

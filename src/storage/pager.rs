@@ -99,7 +99,7 @@ impl Pager {
         // update num_pages
         self.num_pages += 1;
         // return new page
-        return self.cache.get(&new_id).unwrap();
+        self.cache.get(&new_id).unwrap()
     }
 
     /// Allocates new page with header, update its metadata and return it in mutable
@@ -114,7 +114,7 @@ impl Pager {
         // update num_pages
         self.num_pages += 1;
         // return new page
-        return self.cache.get_mut(&new_id).unwrap();
+        self.cache.get_mut(&new_id).unwrap()
     }
 
     /// Flush page by id, only flush if dirty
@@ -172,7 +172,7 @@ impl Pager {
         // update num_pages
         self.num_pages += 1;
         // return new page
-        return new_id;
+        new_id
     }
 
     /// Register the page to pager using target id
