@@ -6,7 +6,7 @@ use crate::interface::{
     printer::PrintableTable,
 };
 
-/// The the parse input from the raw user input
+/// Get and parse input from the raw user input
 /// NOTE: the parse tree doesn't know the catalog. Caller must
 /// check the correctness of the mentioned table/col name/type
 pub fn get_input() -> Result<Cmd, ParseErr> {
@@ -48,13 +48,19 @@ pub fn get_input() -> Result<Cmd, ParseErr> {
 
 const PROMPT_SYMBOL: &str = "» ";
 
+/// Prompt user input until it get something that is not empty
 pub fn get_raw_input() -> String {
-    print!("{PROMPT_SYMBOL}");
-    std::io::stdout().flush().unwrap();
+    loop {
+        print!("{PROMPT_SYMBOL}");
+        std::io::stdout().flush().unwrap();
 
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).unwrap();
-    String::from(input.trim_end())
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).unwrap();
+        let trimmed = String::from(input.trim_end());
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
 }
 
 pub fn output(msg: &str) {
