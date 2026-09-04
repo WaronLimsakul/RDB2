@@ -3,6 +3,7 @@ use std::io::Write;
 use crate::interface::{
     Cmd, MetaCmd,
     parser::{ParseErr, Parser, Stmt},
+    printer::PrintableTable,
 };
 
 /// The the parse input from the raw user input
@@ -46,7 +47,7 @@ pub fn get_input() -> Result<Cmd, ParseErr> {
 }
 
 pub fn get_raw_input() -> String {
-    print!("> ");
+    print!(">> ");
     std::io::stdout().flush().unwrap();
 
     let mut input = String::new();
@@ -56,4 +57,9 @@ pub fn get_raw_input() -> String {
 
 pub fn output(msg: &str) {
     println!("{msg}");
+}
+
+pub fn output_table(table: &PrintableTable) {
+    print!("{table}");
+    std::io::stdout().flush().unwrap();
 }

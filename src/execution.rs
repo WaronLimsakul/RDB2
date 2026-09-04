@@ -1,13 +1,14 @@
 use std::{fmt, num::TryFromIntError};
 
 use crate::{
-    interface::{Cmd, parser::LiteralExpr},
-    storage::{self, EngineErr, Type, engine::StorageEngine},
+    execution::query::Row,
+    interface::{Cmd, parser::LiteralExpr, printer, repl},
+    storage::{EngineErr, Type, engine::StorageEngine},
 };
 
 mod meta;
 mod project;
-mod query;
+pub mod query;
 mod scan;
 
 pub enum ExecErr {
@@ -29,11 +30,12 @@ pub fn execute(cmd: Cmd, engine: &mut StorageEngine) -> Result<(), ExecErr> {
         }
         Cmd::DQL { ast, raw: _ } => {
             let mut exec_tree = query::execute_dql(ast, engine)?;
+            let mut rows: Vec<Row> = Vec::new();
             // Keep driving the execution tree
             loop {
                 match exec_tree.next() {
                     Ok(Some(row)) => {
-                        println!("{:?}", row); // TODO NOW: print better
+                        rows.push(row);
                     }
                     Ok(None) => {
                         break;
@@ -43,14 +45,21 @@ pub fn execute(cmd: Cmd, engine: &mut StorageEngine) -> Result<(), ExecErr> {
                     }
                 }
             }
+
+            let print_table = printer::PrintableTable {
+                schema: exec_tree.schema(),
+                rows,
+            };
+            // TODO: support other output, only terminal for now
+            repl::output_table(&print_table);
         }
         Cmd::DDL { ast, raw: _ } => {
             query::execute_ddl(ast, engine)?;
-            println!("Executed"); // TODO NOW: print better
+            repl::output("Executed"); // TODO: print something more useful
         }
         Cmd::DML { ast, raw: _ } => {
             query::execute_dml(ast, engine)?;
-            println!("Executed"); // TODO NOW: print better
+            repl::output("Executed"); // TODO: print something more useful
         }
     }
 
