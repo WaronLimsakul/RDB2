@@ -5,7 +5,7 @@
 
 use crate::{
     execution::{ExecErr, project::Project, scan::Scan},
-    interface::parser::{ColumnList, ExprNode, LiteralExpr, ParseTree, RowValueNode, Stmt},
+    interface::parser::{ColumnList, ExprNode, LiteralExpr, OpExpr, ParseTree, RowValueNode, Stmt},
     storage::{
         ColData, KeyData, KeyType, RecData, RowData, Type, engine::StorageEngine,
         row_cursor::RowCursor, table::TableSchema,
@@ -114,21 +114,13 @@ fn assemble_row_data(val_node: RowValueNode, schema: &TableSchema) -> Result<Row
     }
 
     let mut values = val_node.values.into_iter();
-    let key_data = if let ExprNode::Literal(literal) = values.next().unwrap() {
-        literal_to_col_data(literal, schema.key.1.into())?
-    } else {
-        unimplemented!("Have not implemented non-literal key yet.");
-    };
+    let key_data = expr_to_col_data(values.next().unwrap(), schema.key.1.into())?;
 
     let mut rec_data = RecData {
         vals: Vec::with_capacity(schema.vals.len()),
     };
-    for (i, col_val) in values.enumerate() {
-        let col_data = if let ExprNode::Literal(literal) = col_val {
-            literal_to_col_data(literal, schema.vals[i].1)?
-        } else {
-            unimplemented!("Have not implemented non-literal data yet.");
-        };
+    for (i, expr_node) in values.enumerate() {
+        let col_data = expr_to_col_data(expr_node, schema.vals[i].1)?;
         rec_data.vals.push(col_data);
     }
 
@@ -136,6 +128,51 @@ fn assemble_row_data(val_node: RowValueNode, schema: &TableSchema) -> Result<Row
         key: key_data.try_into().map_err(|e| ExecErr::Storage(e))?,
         vals: rec_data,
     })
+}
+
+/// Convert const expression node in parse tree to storage engine's ColData
+fn expr_to_col_data(expr: ExprNode, target: Type) -> Result<ColData, ExecErr> {
+    match expr {
+        ExprNode::Op(op) => match op {
+            OpExpr::Plus(lhs, rhs) => {
+                if !target.is_numeric() {
+                    return Err(ExecErr::NonNumericType(target));
+                }
+                let l_data = expr_to_col_data(*lhs, target)?;
+                let r_data = expr_to_col_data(*rhs, target)?;
+                Ok(l_data + r_data)
+            }
+            OpExpr::Minus(lhs, rhs) => {
+                if !target.is_numeric() {
+                    return Err(ExecErr::NonNumericType(target));
+                }
+                let l_data = expr_to_col_data(*lhs, target)?;
+                let r_data = expr_to_col_data(*rhs, target)?;
+                Ok(l_data - r_data)
+            }
+            OpExpr::Mult(lhs, rhs) => {
+                if !target.is_numeric() {
+                    return Err(ExecErr::NonNumericType(target));
+                }
+                let l_data = expr_to_col_data(*lhs, target)?;
+                let r_data = expr_to_col_data(*rhs, target)?;
+                Ok(l_data * r_data)
+            }
+            OpExpr::Div(lhs, rhs) => {
+                if !target.is_numeric() {
+                    return Err(ExecErr::NonNumericType(target));
+                }
+                let l_data = expr_to_col_data(*lhs, target)?;
+                let r_data = expr_to_col_data(*rhs, target)?;
+                Ok(l_data / r_data)
+            }
+            // TODO: support Eq and Neq
+            OpExpr::Eq(_, _) | OpExpr::Neq(_, _) => {
+                unimplemented!("Have not implement == and != operator yet");
+            }
+        },
+        ExprNode::Literal(lit) => literal_to_col_data(lit, target),
+    }
 }
 
 /// Convert literal value from user input to storage engine's ColData

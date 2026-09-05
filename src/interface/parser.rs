@@ -68,7 +68,10 @@ pub enum LiteralExpr {
     Float(f64),
 }
 
-// Change this -> change parser::parse_expr, lexer::Op
+// Change this -> change
+// - parser::parse_expr
+// - lexer::Op
+// - query::expr_to_col_data
 #[derive(Debug, PartialEq)]
 pub enum OpExpr {
     Plus(Box<ExprNode>, Box<ExprNode>),
@@ -721,7 +724,7 @@ mod tests {
 
     #[test]
     fn parse_op_expr() {
-        let mut parser = Parser::new("insert Foo (1+(2-3), 'hello' != 'world');");
+        let mut parser = Parser::new("insert Foo (1+(2-3), 'hello' != 'world'):");
         let stmt = parser.parse().unwrap().root;
 
         assert!(matches!(

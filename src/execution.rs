@@ -17,6 +17,8 @@ pub enum ExecErr {
     InvalidVal(LiteralExpr, Type),    // Invalid provided `LiteralExpr`, expect `Type` type
     IntConversion(TryFromIntError),   // Error converting int input value to target type
     UnmatchedNumValues(usize, usize), // Expect <first usize> values, user provides <second usize> values,
+    NonNumericType(Type),             // Found `Type` in a place that should be for numeric type
+    InvalidType(Type, Type),          // Expect first `Type`, found the second `Type`
 }
 
 /// Execute non-metadata command
@@ -80,6 +82,8 @@ impl fmt::Display for ExecErr {
             UnmatchedNumValues(expect, got) => {
                 write!(f, "User provide {} values, expect {} values", got, expect)
             }
+            NonNumericType(got) => write!(f, "Expect numeric type, found {}", got),
+            InvalidType(expect, got) => write!(f, "Expect {} type, found {}", expect, got),
         }
     }
 }

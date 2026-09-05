@@ -11,9 +11,8 @@ pub mod row_cursor;
 pub mod table;
 
 use EngineErr::*;
+use std::ops;
 use std::{error::Error, fmt::Display};
-
-use crate::storage::engine::StorageEngine;
 
 const TABLE_MAGIC_NUMBER: [u8; 8] = [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef];
 const TABLE_FILE_EXTENSION: &str = "rdb";
@@ -129,6 +128,14 @@ impl Type {
             )),
         }
     }
+
+    /// Whether the type can be calculated by +/-/*/÷
+    pub fn is_numeric(&self) -> bool {
+        match self {
+            Type::Int | Type::Uint | Type::Long | Type::Ulong | Type::Float => true,
+            Type::String | Type::Bool => false,
+        }
+    }
 }
 
 /// Types that are allowed for key
@@ -229,6 +236,89 @@ impl Display for ColData {
             String(v) => write!(f, "{v}"),
             Bool(v) => write!(f, "{v}"),
             Float(v) => write!(f, "{v}"),
+        }
+    }
+}
+
+impl From<&ColData> for Type {
+    fn from(value: &ColData) -> Self {
+        use ColData::*;
+        match value {
+            Int(_) => Type::Int,
+            Uint(_) => Type::Uint,
+            Long(_) => Type::Long,
+            Ulong(_) => Type::Ulong,
+            String(_) => Type::String,
+            Bool(_) => Type::Bool,
+            Float(_) => Type::Float,
+        }
+    }
+}
+
+/// Implement basic operation on ColData numeric type
+/// Requires: caller must make sure both type are the same and are numeric.
+/// Otherwise, panic.
+impl ops::Add for ColData {
+    type Output = ColData;
+    fn add(self, rhs: Self) -> Self::Output {
+        use ColData::*;
+        match (self, rhs) {
+            (Int(l), Int(r)) => Int(l + r),
+            (Uint(l), Uint(r)) => Uint(l + r),
+            (Long(l), Long(r)) => Long(l + r),
+            (Ulong(l), Ulong(r)) => Ulong(l + r),
+            (Float(l), Float(r)) => Float(l + r),
+            _ => {
+                panic!("Add operator found non equal type");
+            }
+        }
+    }
+}
+impl ops::Sub for ColData {
+    type Output = ColData;
+    fn sub(self, rhs: Self) -> Self::Output {
+        use ColData::*;
+        match (self, rhs) {
+            (Int(l), Int(r)) => Int(l - r),
+            (Uint(l), Uint(r)) => Uint(l - r),
+            (Long(l), Long(r)) => Long(l - r),
+            (Ulong(l), Ulong(r)) => Ulong(l - r),
+            (Float(l), Float(r)) => Float(l - r),
+            _ => {
+                panic!("Subtract operator found non equal type");
+            }
+        }
+    }
+}
+impl ops::Mul for ColData {
+    type Output = ColData;
+    fn mul(self, rhs: Self) -> Self::Output {
+        use ColData::*;
+        match (self, rhs) {
+            (Int(l), Int(r)) => Int(l * r),
+            (Uint(l), Uint(r)) => Uint(l * r),
+            (Long(l), Long(r)) => Long(l * r),
+            (Ulong(l), Ulong(r)) => Ulong(l * r),
+            (Float(l), Float(r)) => Float(l * r),
+            _ => {
+                panic!("Mult operator found non equal type");
+            }
+        }
+    }
+}
+impl ops::Div for ColData {
+    type Output = ColData;
+    fn div(self, rhs: Self) -> Self::Output {
+        use ColData::*;
+        match (self, rhs) {
+            (Int(l), Int(r)) => Int(l / r),
+            (Uint(l), Uint(r)) => Uint(l / r),
+            (Long(l), Long(r)) => Long(l / r),
+            (Ulong(l), Ulong(r)) => Ulong(l / r),
+            (Float(l), Float(r)) => Float(l / r),
+            _ => {
+                panic!("Div operator found non equal type");
+            }
         }
     }
 }
