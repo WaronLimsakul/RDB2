@@ -442,7 +442,7 @@ impl<'a> Parser<'a> {
         Ok(schema)
     }
 
-    // Allowed types: `int`, `uint`, `long`, `ulong`, `bool`, `string`
+    // Allowed types: `int`, `uint`, `long`, `ulong`, `bool`, `string`, `float`
     fn parse_column_type(&mut self) -> Result<storage::Type, ParseErr> {
         let type_token = self.next_token()?;
         // Just consider data type to by ID for now
@@ -458,6 +458,7 @@ impl<'a> Parser<'a> {
             "ulong" => Type::Ulong,
             "string" => Type::String,
             "bool" => Type::Bool,
+            "float" => Type::Float,
             _ => {
                 return Err(ParseErr::Expect("Data type", type_token.content));
             }

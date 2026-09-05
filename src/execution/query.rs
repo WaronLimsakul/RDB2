@@ -103,7 +103,7 @@ pub fn execute_dml<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
 /// Convert parse tree's RowValueNode to storage engine's RowData
 // TODO: Support positional + operator literal
 fn assemble_row_data(val_node: RowValueNode, schema: &TableSchema) -> Result<RowData, ExecErr> {
-    // TODO NOW: PK might have to be the first, cuz otherwise, how would I know?
+    // NOTE: PK might have to be the first for now.
 
     // Check len first, so no index problem for sure
     if val_node.values.len() != schema.num_cols() {
@@ -151,9 +151,12 @@ fn literal_to_col_data(literal: LiteralExpr, target: Type) -> Result<ColData, Ex
                 return Err(ExecErr::InvalidVal(literal, target));
             }
         },
-        Float(_) => {
-            unimplemented!("Haven't implement float yet");
-        }
+        Float(f) => match target {
+            Type::Float => ColData::Float(f as f32), // TODO: see if we should just parse as f32
+            _ => {
+                return Err(ExecErr::InvalidVal(literal, target));
+            }
+        },
         String(s) => {
             if target == Type::String {
                 ColData::String(s)

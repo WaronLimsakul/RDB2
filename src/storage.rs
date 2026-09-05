@@ -30,6 +30,8 @@ const MAX_RECORD_SIZE: usize = PAGE_SIZE / 8;
 // 1. all impls
 // 2. ColData
 // 3. TableSchema impl
+// 4. parser::parse_column_type
+// 5. query::litera_to_column_data
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Type {
     Int,
