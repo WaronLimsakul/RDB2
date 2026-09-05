@@ -1,17 +1,34 @@
 use std::process;
 
-use crate::{execution::ExecErr, interface::repl};
+use rustyline::DefaultEditor;
+
+use crate::interface::repl;
 
 mod execution;
 mod interface;
 mod storage;
 
+// TODO: let user determine this
+const DB_DIR: &str = ".rdb";
+
 fn main() {
     interface::welcome();
-    // TODO: input user selected root dir
-    let mut engine = storage::engine::StorageEngine::new(".rdb").unwrap();
+
+    // Single line reader instance
+    let mut line_reader = match DefaultEditor::new() {
+        Ok(lr) => lr,
+        Err(e) => {
+            repl::output(&format!("Error create line reader: {}", e));
+            process::exit(1);
+        }
+    };
+
+    // Single storage engine instance
+    let mut engine = storage::engine::StorageEngine::new(DB_DIR).unwrap();
+
+    // REPL
     loop {
-        let input = match repl::get_input() {
+        let input = match repl::get_input(&mut line_reader) {
             Ok(cmd) => cmd,
             Err(err) => {
                 repl::output(&format!("Invalid input: {}", err));

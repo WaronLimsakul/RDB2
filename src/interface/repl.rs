@@ -1,5 +1,7 @@
 use std::io::Write;
 
+use rustyline::{DefaultEditor, error::ReadlineError};
+
 use crate::interface::{
     Cmd, MetaCmd,
     parser::{ParseErr, Parser, Stmt},
@@ -9,8 +11,8 @@ use crate::interface::{
 /// Get and parse input from the raw user input
 /// NOTE: the parse tree doesn't know the catalog. Caller must
 /// check the correctness of the mentioned table/col name/type
-pub fn get_input() -> Result<Cmd, ParseErr> {
-    let raw = get_raw_input();
+pub fn get_input(line_reader: &mut DefaultEditor) -> Result<Cmd, ParseErr> {
+    let raw = get_raw_input(line_reader);
 
     // Metacommand case
     if raw.chars().next().unwrap() == '.' {
@@ -49,16 +51,16 @@ pub fn get_input() -> Result<Cmd, ParseErr> {
 const PROMPT_SYMBOL: &str = "» ";
 
 /// Prompt user input until it get something that is not empty
-pub fn get_raw_input() -> String {
-    loop {
-        print!("{PROMPT_SYMBOL}");
-        std::io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-        let trimmed = String::from(input.trim_end());
-        if !trimmed.is_empty() {
-            return trimmed;
+pub fn get_raw_input(line_reader: &mut DefaultEditor) -> String {
+    match line_reader.readline(PROMPT_SYMBOL) {
+        Ok(line) => {
+            line_reader.add_history_entry(line.as_str());
+            line
+        }
+        // CTRL-C and CTRL-D is count as exit for now
+        Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => ".exit".to_string(),
+        Err(err) => {
+            panic!("Readline error {}", err);
         }
     }
 }
