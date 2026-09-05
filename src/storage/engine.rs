@@ -359,4 +359,48 @@ mod tests {
             assert_eq!(rows[2].key, KeyData::Uint(3));
         }
     }
+
+    // Helper for test_float_type
+    fn schema_float() -> TableSchema {
+        TableSchema {
+            key: ("id".to_string(), KeyType::Uint),
+            vals: vec![
+                ("name".to_string(), Type::String),
+                ("win_rate".to_string(), Type::Float),
+            ],
+        }
+    }
+
+    // Helper for test_float_type
+    fn row_float(id: u32, name: &str, win_rate: f32) -> RowData {
+        RowData {
+            key: KeyData::Uint(id),
+            vals: RecData {
+                vals: vec![ColData::String(name.to_string()), ColData::Float(win_rate)],
+            },
+        }
+    }
+
+    #[test]
+    fn test_float_type() {
+        let dir = setup_test_dir("float_type");
+        let mut engine = StorageEngine::new(&dir).unwrap();
+        engine.new_table("test", schema_float()).unwrap();
+
+        engine
+            .insert_row("test", row_float(1, "Alice", 0.5))
+            .unwrap();
+        engine.insert_row("test", row_float(2, "Bob", 0.6)).unwrap();
+        engine
+            .insert_row("test", row_float(3, "Charlie", 0.4))
+            .unwrap();
+
+        let cursor = engine.get_all_rows("test").unwrap();
+        let rows: Vec<RowData> = cursor.collect::<Result<Vec<_>, _>>().unwrap();
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].vals.vals[1], ColData::Float(0.5));
+        assert_eq!(rows[1].vals.vals[1], ColData::Float(0.6));
+        assert_eq!(rows[2].vals.vals[1], ColData::Float(0.4));
+    }
 }

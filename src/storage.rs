@@ -38,6 +38,7 @@ pub enum Type {
     Ulong,
     String, // size (u16) + utf-8
     Bool,
+    Float,
 }
 
 impl Display for Type {
@@ -50,6 +51,7 @@ impl Display for Type {
             Ulong => write!(f, "unsigned long"),
             String => write!(f, "string"),
             Bool => write!(f, "bolean"),
+            Float => write!(f, "float"),
         }
     }
 }
@@ -74,6 +76,7 @@ impl Type {
             Ulong => 3,
             String => 4,
             Bool => 5,
+            Float => 6,
         }
     }
 
@@ -87,6 +90,7 @@ impl Type {
             3 => Some(Ulong),
             4 => Some(String),
             5 => Some(Bool),
+            6 => Some(Float),
             _ => None,
         }
     }
@@ -117,6 +121,10 @@ impl Type {
                 Ok((ColData::String(s), 2 + len))
             }
             Type::Bool => Ok((ColData::Bool(bytes[0] == 1), 1)),
+            Type::Float => Ok((
+                (ColData::Float(f32::from_be_bytes(bytes[0..4].try_into().unwrap()))),
+                4,
+            )),
         }
     }
 }
@@ -146,7 +154,7 @@ impl Display for KeyType {
 }
 
 /// Column types with data
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ColData {
     Int(i32),
     Uint(u32),
@@ -154,13 +162,14 @@ pub enum ColData {
     Ulong(u64),
     String(String),
     Bool(bool),
+    Float(f32),
 }
 
 impl ColData {
     fn size(&self) -> usize {
         use ColData::*;
         match self {
-            Int(_) | Uint(_) => 4,
+            Int(_) | Uint(_) | Float(_) => 4,
             Long(_) | Ulong(_) => 8,
             String(s) => 2 + s.len(),
             Bool(_) => 1,
@@ -183,6 +192,7 @@ impl ColData {
             }
             Bool(true) => vec![1u8],
             Bool(false) => vec![0u8],
+            Float(f) => f.to_be_bytes().to_vec(),
         }
     }
 
@@ -201,6 +211,7 @@ impl ColData {
             }
             Bool(true) => v.push(1u8),
             Bool(false) => v.push(0u8),
+            Float(f) => v.extend_from_slice(&f.to_be_bytes()),
         };
     }
 }
@@ -215,6 +226,7 @@ impl Display for ColData {
             Ulong(v) => write!(f, "{v}"),
             String(v) => write!(f, "{v}"),
             Bool(v) => write!(f, "{v}"),
+            Float(v) => write!(f, "{v}"),
         }
     }
 }
