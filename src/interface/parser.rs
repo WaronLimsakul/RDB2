@@ -68,12 +68,15 @@ pub enum LiteralExpr {
     Float(f64),
 }
 
+// Change this -> change parser::parse_expr, lexer::Op
 #[derive(Debug, PartialEq)]
 pub enum OpExpr {
     Plus(Box<ExprNode>, Box<ExprNode>),
     Minus(Box<ExprNode>, Box<ExprNode>),
     Mult(Box<ExprNode>, Box<ExprNode>),
     Div(Box<ExprNode>, Box<ExprNode>),
+    Eq(Box<ExprNode>, Box<ExprNode>),
+    Neq(Box<ExprNode>, Box<ExprNode>),
 }
 
 pub struct ParseTree {
@@ -321,16 +324,76 @@ impl<'a> Parser<'a> {
         Ok(RowValueNode { values: vals })
     }
 
-    // Grammar: just literal value for now
-    // TODO: support operation on literal value
+    // Grammar: constant value expression. Can be
+    // - '(' Expr ')'
+    // - <Expr> Operator <Expr>
+    // - Literal expression
     fn parse_expr(&mut self) -> Result<ExprNode, ParseErr> {
-        // A literal can be
-        // - string
-        // - boolean
-        // - numeric
-        //   - a single numeric literal
-        //   - a minus + numeric literal
+        let first_token = self.peek_token()?;
+        match first_token.token_type {
+            TokenType::Punc(Punc::LParen) => {
+                self.next_token()?; // Pop '('
+                let res = self.parse_expr()?;
+                let rparen = self.next_token()?;
+                if rparen.token_type != TokenType::Punc(Punc::RParen) {
+                    return Err(ParseErr::Expect(")", rparen.content));
+                }
+                Ok(res)
+            }
+            TokenType::Literal(_) | TokenType::Op(Op::Minus) => {
+                let literal = self.parse_literal_expr()?;
+                let next_token = self.peek_token()?;
+                // NOTE: for now, we only guarantee correctness if they use parentheses
+                match next_token.token_type {
+                    TokenType::Op(_) => {
+                        let op = self.next_token()?;
+                        let r_literal = self.parse_expr()?;
+                        let op_expr = match op.token_type {
+                            TokenType::Op(Op::Plus) => {
+                                OpExpr::Plus(Box::new(literal), Box::new(r_literal))
+                            }
+                            TokenType::Op(Op::Minus) => {
+                                OpExpr::Minus(Box::new(literal), Box::new(r_literal))
+                            }
+                            TokenType::Op(Op::Star) => {
+                                OpExpr::Mult(Box::new(literal), Box::new(r_literal))
+                            }
+                            TokenType::Op(Op::Div) => {
+                                OpExpr::Div(Box::new(literal), Box::new(r_literal))
+                            }
+                            TokenType::Op(Op::Eq) => {
+                                OpExpr::Eq(Box::new(literal), Box::new(r_literal))
+                            }
+                            TokenType::Op(Op::Neq) => {
+                                OpExpr::Neq(Box::new(literal), Box::new(r_literal))
+                            }
+                            _ => {
+                                return Err(ParseErr::Expect("Operator", op.content));
+                            }
+                        };
+                        Ok(ExprNode::Op(op_expr))
+                    }
+                    _ => Ok(literal),
+                }
+            }
+            _ => {
+                return Err(ParseErr::Expect(
+                    "Const expression",
+                    self.next_token()? /*first_token*/
+                        .content,
+                ));
+            }
+        }
+    }
 
+    /// Parse ExprNode::LiteralExpr
+    // A literal can be
+    // - string
+    // - boolean
+    // - numeric
+    //   - a single numeric literal
+    //   - a minus + numeric literal
+    fn parse_literal_expr(&mut self) -> Result<ExprNode, ParseErr> {
         let first_token = self.next_token()?;
         let mut minus = false; // In case first token is just minus sign
         let mut node = match first_token.token_type {
@@ -645,6 +708,50 @@ mod tests {
         if let Stmt::New { table, schema } = stmt {
             assert_eq!(table, expected_table);
             assert_eq!(schema, expected_schema);
+        }
+    }
+
+    // Helper for parse_op_expr
+    fn lit_node_int(v: i64) -> ExprNode {
+        ExprNode::Literal(LiteralExpr::Int(v))
+    }
+    fn lit_node_str(s: &'static str) -> ExprNode {
+        ExprNode::Literal(LiteralExpr::String(s.to_string()))
+    }
+
+    #[test]
+    fn parse_op_expr() {
+        let mut parser = Parser::new("insert Foo (1+(2-3), 'hello' != 'world');");
+        let stmt = parser.parse().unwrap().root;
+
+        assert!(matches!(
+            stmt,
+            Stmt::Insert {
+                table: _,
+                values: _
+            }
+        ));
+
+        let expected_values = vec![RowValueNode {
+            values: vec![
+                // 1 + (2 - 3)
+                ExprNode::Op(OpExpr::Plus(
+                    Box::new(lit_node_int(1)),
+                    Box::new(ExprNode::Op(OpExpr::Minus(
+                        Box::new(lit_node_int(2)),
+                        Box::new(lit_node_int(3)),
+                    ))),
+                )),
+                // 'hello' != 'world'
+                ExprNode::Op(OpExpr::Neq(
+                    Box::new(lit_node_str("hello")),
+                    Box::new(lit_node_str("world")),
+                )),
+            ],
+        }];
+
+        if let Stmt::Insert { table: _, values } = stmt {
+            assert_eq!(expected_values, values);
         }
     }
 }

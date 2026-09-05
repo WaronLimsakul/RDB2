@@ -54,10 +54,10 @@ const PROMPT_SYMBOL: &str = "» ";
 pub fn get_raw_input(line_reader: &mut DefaultEditor) -> String {
     match line_reader.readline(PROMPT_SYMBOL) {
         Ok(line) => {
-            line_reader.add_history_entry(line.as_str());
+            line_reader.add_history_entry(line.as_str()).unwrap();
             line
         }
-        // CTRL-C and CTRL-D is count as exit for now
+        // CTRL-C and CTRL-D are counted as exit for now
         Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => ".exit".to_string(),
         Err(err) => {
             panic!("Readline error {}", err);
