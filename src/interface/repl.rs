@@ -19,9 +19,9 @@ pub fn get_input(line_reader: &mut DefaultEditor) -> Result<Cmd, ParseErr> {
         let meta_cmd = match &raw[1..] {
             "quit" => MetaCmd::Quit,
             "exit" => MetaCmd::Quit,
-            _ => {
-                panic!("Meta command {} not found", String::from(raw));
-            } // TODO: handle it better
+            "tables" => MetaCmd::Tables,
+            "ls" => MetaCmd::Tables,
+            _ => return Err(ParseErr::InvalidMeta(raw)),
         };
 
         return Ok(Cmd::Meta { cmd: meta_cmd, raw });

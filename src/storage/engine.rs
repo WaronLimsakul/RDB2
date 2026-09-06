@@ -2,7 +2,7 @@
 //!
 //! Whatever bad happen to the disk file, blame this guy
 
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{collections::HashMap, ffi::OsStr, fs, path::PathBuf};
 
 use crate::storage::{
     KeyData, RowData, TABLE_FILE_EXTENSION,
@@ -60,6 +60,37 @@ impl StorageEngine {
     pub fn delete_table(&mut self, name: &str) -> Result<(), EngineErr> {
         self.tables.remove(name);
         fs::remove_file(self.get_table_file_path(name)).map_err(|e| EngineErr::FsErr(Box::new(e)))
+    }
+
+    /// List all tables in the db directory
+    // For now, just find the file with `.rdb` extension.
+    pub fn list_tables(&self) -> Result<Vec<String>, EngineErr> {
+        let mut res: Vec<String> = Vec::new();
+        for it in fs::read_dir(&self.root_dir).map_err(|e| EngineErr::FsErr(Box::new(e)))? {
+            let entry = it.map_err(|e| EngineErr::FsErr(Box::new(e)))?;
+            if !entry
+                .file_type()
+                .map_err(|e| EngineErr::FsErr(Box::new(e)))?
+                .is_file()
+            {
+                continue;
+            }
+
+            let path = entry.path();
+            if path.extension() != Some(OsStr::new(TABLE_FILE_EXTENSION)) {
+                continue;
+            }
+
+            res.push(
+                path.file_prefix()
+                    .unwrap() /* should always have prefix */
+                    .to_str()
+                    .unwrap() /* table name is always unicode */
+                    .to_string(),
+            );
+        }
+
+        Ok(res)
     }
 
     /// Get schema of the target table

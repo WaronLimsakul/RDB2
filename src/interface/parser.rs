@@ -13,6 +13,7 @@ pub enum ParseErr {
     InvalidExpr(String),     // Found this tring in the expression
     PKeyDefined(bool),       // true = defined more than once (not supported), false = not provided
     InvalidPKeyType(storage::Type),
+    InvalidMeta(String), // Meta command `String` not found
 }
 
 pub enum Stmt {
@@ -240,9 +241,7 @@ impl<'a> Parser<'a> {
 
         // Last token must be ';'
         let last_token = self.next_token()?;
-        if last_token.token_type != TokenType::Punc(Punc::Semi) {
-            return Err(ParseErr::Expect(";", last_token.content));
-        }
+        if last_token.token_type != TokenType::Punc(Punc::Semi) {}
 
         let stmt = Stmt::Delete { table };
         Ok(stmt)
@@ -601,6 +600,7 @@ impl fmt::Display for ParseErr {
                 "Invalid primary key type {}. Only uint and ulong allowed.",
                 t
             ),
+            InvalidMeta(c) => write!(f, "Invalid meta command '{}'.", c),
         }
     }
 }

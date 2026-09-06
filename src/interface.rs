@@ -16,6 +16,7 @@ pub enum Cmd {
 
 pub enum MetaCmd {
     Quit,
+    Tables, // List all tables in db
 }
 
 const LOGO: &str = r#"

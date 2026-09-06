@@ -6,8 +6,9 @@
 use std::process;
 
 use crate::{
-    interface::MetaCmd,
-    storage::{EngineErr, engine::StorageEngine},
+    execution::query::Column,
+    interface::{MetaCmd, printer::PrintableTable, repl::output_table},
+    storage::{ColData, EngineErr, Type, engine::StorageEngine},
 };
 
 pub fn execute(cmd: MetaCmd, engine: &mut StorageEngine) -> Result<(), EngineErr> {
@@ -15,6 +16,23 @@ pub fn execute(cmd: MetaCmd, engine: &mut StorageEngine) -> Result<(), EngineErr
         MetaCmd::Quit => {
             engine.flush_all()?;
             process::exit(0);
+        }
+        MetaCmd::Tables => {
+            let schema = vec![Column {
+                name: "table".to_string(),
+                col_type: Type::String,
+            }];
+            let tables = engine
+                .list_tables()?
+                .into_iter()
+                .map(|table| vec![ColData::String(table)])
+                .collect();
+            let report = PrintableTable {
+                schema: &schema,
+                rows: tables,
+            };
+            output_table(&report);
+            Ok(())
         }
     }
 }
