@@ -56,6 +56,12 @@ impl StorageEngine {
         Ok(()) // NOTE: don't have to insert any page, will do that when insert first row
     }
 
+    /// Delete table from the DB if exists
+    pub fn delete_table(&mut self, name: &str) -> Result<(), EngineErr> {
+        self.tables.remove(name);
+        fs::remove_file(self.get_table_file_path(name)).map_err(|e| EngineErr::FsErr(Box::new(e)))
+    }
+
     /// Get schema of the target table
     pub fn get_schema(&mut self, table_name: &str) -> Result<&TableSchema, EngineErr> {
         let table = self.get_table(table_name)?;

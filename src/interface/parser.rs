@@ -29,6 +29,9 @@ pub enum Stmt {
         table: TableNode,
         schema: TableSchema, // Will just use engine's schema right away
     },
+    Delete {
+        table: TableNode,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -105,6 +108,7 @@ impl<'a> Parser<'a> {
             TokenType::KeyWord(KeyWord::Select) => self.parse_select_stmt()?,
             TokenType::KeyWord(KeyWord::Insert) => self.parse_insert_stmt()?,
             TokenType::KeyWord(KeyWord::New) => self.parse_new_stmt()?,
+            TokenType::KeyWord(KeyWord::Delete) => self.parse_delete_stmt()?,
             _ => {
                 return Err(ParseErr::Expect(
                     "First token of type: select/insert/new",
@@ -216,6 +220,31 @@ impl<'a> Parser<'a> {
         }
 
         let stmt = Stmt::New { table, schema };
+        Ok(stmt)
+    }
+
+    // Grammar: `delete table <table>;`
+    fn parse_delete_stmt(&mut self) -> Result<Stmt, ParseErr> {
+        debug_assert_eq!(
+            self.peek_token()?.token_type,
+            TokenType::KeyWord(KeyWord::Delete)
+        );
+
+        self.next_token()?; // Pop 'delete'
+        let table_keyword = self.next_token()?;
+        if table_keyword.token_type != TokenType::KeyWord(KeyWord::Table) {
+            return Err(ParseErr::Expect("table", table_keyword.content));
+        }
+
+        let table = self.parse_table()?;
+
+        // Last token must be ';'
+        let last_token = self.next_token()?;
+        if last_token.token_type != TokenType::Punc(Punc::Semi) {
+            return Err(ParseErr::Expect(";", last_token.content));
+        }
+
+        let stmt = Stmt::Delete { table };
         Ok(stmt)
     }
 

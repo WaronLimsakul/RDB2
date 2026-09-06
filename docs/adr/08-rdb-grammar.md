@@ -1,7 +1,8 @@
-3 main functions we need
+4 main functions we need
 1. Create table
 2. Insert values
 3. Get values
+4. Drop table
 
 ## Create table
 Let's do something like:
@@ -41,5 +42,10 @@ from <table_name>;
 - Will deal with predicate and aggregate later.
 
 
-
+## Drop table
+I like `delete`.
+```
+delete table Foo;
+```
+That's it.
 

@@ -64,17 +64,23 @@ pub fn execute_dql<'a>(
     Ok(exec_tree)
 }
 
-/// Execute DDL: only `create table` for now
+/// Execute DDL: `new table` or `delete table`
 pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Result<(), ExecErr> {
-    let (table, schema) = if let Stmt::New { table, schema } = query.root {
-        (table, schema)
-    } else {
-        panic!("Should be new statement");
-    };
-
-    engine
-        .new_table(table.name.as_str(), schema)
-        .map_err(|e| ExecErr::Storage(e))?;
+    match query.root {
+        Stmt::New { table, schema } => {
+            engine
+                .new_table(table.name.as_str(), schema)
+                .map_err(|e| ExecErr::Storage(e))?;
+        }
+        Stmt::Delete { table } => {
+            engine
+                .delete_table(table.name.as_str())
+                .map_err(|e| ExecErr::Storage(e))?;
+        }
+        _ => {
+            unreachable!("DDL shouldn't be this");
+        }
+    }
 
     Ok(())
 }

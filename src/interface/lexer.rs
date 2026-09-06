@@ -36,6 +36,7 @@ pub enum KeyWord {
     Primary,
     Insert,
     Describe,
+    Delete,
 }
 
 // Literal values
@@ -309,6 +310,7 @@ impl<'a> Lexer<'a> {
             "primary" => TokenType::KeyWord(KeyWord::Primary),
             "insert" => TokenType::KeyWord(KeyWord::Insert),
             "describe" => TokenType::KeyWord(KeyWord::Describe),
+            "delete" => TokenType::KeyWord(KeyWord::Delete),
             "true" | "false" => TokenType::Literal(Literal::Bool),
             _ => TokenType::ID,
         };
