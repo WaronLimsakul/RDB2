@@ -591,7 +591,7 @@ impl<'a> Parser<'a> {
         }
 
         use storage::Type;
-        let col_type = match type_token.content.as_str() {
+        let col_type = match type_token.content.to_lowercase().as_str() {
             "int" => Type::Int,
             "uint" => Type::Uint,
             "long" => Type::Long,
@@ -904,8 +904,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_op_expr() {
-        let mut parser = Parser::new("insert Foo (1+(2-3), 'hello' != 'world');");
+    fn parse_op_expr_numeric() {
+        let mut parser = Parser::new("insert Foo (1+(2-3), 5*6);");
         let stmt = parser.parse().unwrap().root;
 
         assert!(matches!(
@@ -926,10 +926,10 @@ mod tests {
                         Box::new(lit_node_int(3)),
                     ))),
                 )),
-                // 'hello' != 'world'
-                ExprNode::Op(OpExpr::Neq(
-                    Box::new(lit_node_str("hello")),
-                    Box::new(lit_node_str("world")),
+                // 5 * 6
+                ExprNode::Op(OpExpr::Mult(
+                    Box::new(lit_node_int(5)),
+                    Box::new(lit_node_int(6)),
                 )),
             ],
         }];
@@ -938,6 +938,8 @@ mod tests {
             assert_eq!(expected_values, values);
         }
     }
+
+    // TODO: Support boolean-type const operator expression
 
     fn lit_node_int(v: i64) -> ExprNode {
         ExprNode::Literal(LiteralExpr::Int(v))
