@@ -379,7 +379,7 @@ impl<'a> Parser<'a> {
         Ok(RowValueNode { values: vals })
     }
 
-    // Grammar: constant value expression. Can be
+    // Grammar: value expression. Can be:
     // - '(' Expr ')'
     // - Column expression
     // - Literal expression
@@ -413,6 +413,12 @@ impl<'a> Parser<'a> {
                     return Ok(literal);
                 }
 
+                // parse_expr won't parse the predicate level expression for now
+                // TODO: parse all predicate level expression
+                if is_predable(&next_token) {
+                    return Ok(literal);
+                }
+
                 // NOTE: for now, we only guarantee correctness if they use parentheses
                 match next_token.token_type {
                     TokenType::Op(_) => {
@@ -437,6 +443,7 @@ impl<'a> Parser<'a> {
                             TokenType::Op(Op::Neq) => {
                                 OpExpr::Neq(Box::new(literal), Box::new(r_literal))
                             }
+                            // TODO NOW: delete if not works
                             _ => {
                                 return Err(ParseErr::Expect("Operator", op.content));
                             }
@@ -625,6 +632,7 @@ impl<'a> Parser<'a> {
 
     // Grammar: <expr> op_pred <expr>
     // - op_pred = op token that is_predable()
+    // - for now, both `expr` should not have op_pred inside
     // TODO: deal with nested condition
     fn parse_predicate(&mut self) -> Result<ExprNode, ParseErr> {
         let lhs = self.parse_expr()?;
