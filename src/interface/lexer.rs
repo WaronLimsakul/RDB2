@@ -255,7 +255,7 @@ impl<'a> Lexer<'a> {
                     .filter(|&c| c == '|')
                     .ok_or(LexErr::Expect('|', '\0'))?;
                 skip = 2;
-                TokenType::Op(Op::And)
+                TokenType::Op(Op::Or)
             }
             _ => panic!("Expect operator character, but found {}", ch),
         };

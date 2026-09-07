@@ -399,10 +399,20 @@ impl<'a> Parser<'a> {
             }
             // Column expression
             TokenType::ID => Ok(ExprNode::Column(self.parse_column()?)),
-            // Literal expression
+            // Literal expression (and might be chained with operator)
             TokenType::Literal(_) | TokenType::Op(Op::Minus) => {
                 let literal = self.parse_literal_expr()?;
                 let next_token = self.peek_token()?;
+
+                // && and || operator are not recursive for now
+                // TODO: process it like other operators
+                if matches!(
+                    next_token.token_type,
+                    TokenType::Op(Op::And) | TokenType::Op(Op::Or)
+                ) {
+                    return Ok(literal);
+                }
+
                 // NOTE: for now, we only guarantee correctness if they use parentheses
                 match next_token.token_type {
                     TokenType::Op(_) => {
