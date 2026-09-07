@@ -68,12 +68,12 @@ impl<'a> PrintableTable<'a> {
     /// Return length of each aligned column we want to print
     fn get_col_lens(&self) -> Vec<usize> {
         // The schema and row should align
-        debug_assert!(self.rows.is_empty() || self.schema.len() == self.rows[0].len());
+        debug_assert!(self.rows.is_empty() || self.schema.num_cols() == self.rows[0].num_cols());
 
         // Initialize column length with the column name length.
         // Always +2 because I want to give leading and trailing space.
-        let mut col_lens = Vec::with_capacity(self.schema.len());
-        for col in self.schema {
+        let mut col_lens = Vec::with_capacity(self.schema.num_cols());
+        for col in &self.schema.cols {
             col_lens.push(col.name.len() + 2); // Give left and right space for col name
         }
 

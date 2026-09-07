@@ -29,8 +29,7 @@ impl<'a> Scan<'a> {
 
     /// Helper for converting storage's RowData to exec's Row
     fn storage_to_exec_row(&self, row: RowData) -> Row {
-        let mut res: Row = Vec::with_capacity(self.schema.len());
-
+        let mut res = Row::with_capacity(self.schema.num_cols());
         res.push(row.key.into());
         for col_val in row.vals.vals {
             res.push(col_val);
@@ -55,7 +54,7 @@ impl<'a> Operator for Scan<'a> {
 
 /// Map storage engine's TableSchema to execution engine's Schema
 fn storage_to_exec_schema(ts: &TableSchema) -> Schema {
-    let mut schema: Schema = Vec::with_capacity(ts.num_cols());
+    let mut schema = Schema::with_capacity(ts.num_cols());
 
     // TODO: check again if PK is always physically first in tuple
     schema.push(Column {

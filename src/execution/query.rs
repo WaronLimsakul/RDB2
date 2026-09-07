@@ -3,18 +3,19 @@
 //! Main function to execute query language
 //!
 
+use std::slice::Iter;
+
 use crate::{
-    execution::{ExecErr, project::Project, scan::Scan},
+    execution::{ExecErr, filter::Filter, project::Project, scan::Scan},
     interface::parser::{ColumnList, ExprNode, LiteralExpr, OpExpr, ParseTree, RowValueNode, Stmt},
-    storage::{
-        ColData, KeyData, KeyType, RecData, RowData, Type, engine::StorageEngine,
-        row_cursor::RowCursor, table::TableSchema,
-    },
+    storage::{ColData, RecData, RowData, Type, engine::StorageEngine, table::TableSchema},
 };
 
 // Something like storange's TableSchema, but we don't care
 // about PK anymore. It's just another column, so we flatten it.
-pub type Schema = Vec<Column>;
+pub struct Schema {
+    pub cols: Vec<Column>,
+}
 
 #[derive(Clone)]
 pub struct Column {
@@ -23,7 +24,9 @@ pub struct Column {
 }
 
 /// Every operator will pass on a `Row` (flatten RowData)
-pub type Row = Vec<ColData>;
+pub struct Row {
+    pub data: Vec<ColData>,
+}
 
 /// All execution tree node must implement this
 pub trait Operator {
@@ -42,23 +45,40 @@ pub fn execute_dql<'a>(
         query.root,
         Stmt::Select {
             table: _,
-            columns: _
+            columns: _,
+            conds: _
         }
     ));
 
     // Extract table and columns out
-    let (table, cols) = if let Stmt::Select { table, columns } = query.root {
-        (table, columns)
+    let (table, cols, conds) = if let Stmt::Select {
+        table,
+        columns,
+        conds,
+    } = query.root
+    {
+        (table, columns, conds)
     } else {
         panic!("Should always be select statement");
     };
 
     // Build execution tree from here
     // TODO: Might have to refactor it to somewhere else
-    let scan = Scan::new(&table.name, engine)?;
+
+    // Always start with scan
+    let scan = Box::from(Scan::new(&table.name, engine)?);
+
+    // In case we have to filter
+    let filterable_scan: Box<dyn Operator + 'a> = if !conds.preds.is_empty() {
+        Box::from(Filter::new(scan, conds)?)
+    } else {
+        scan
+    };
+
+    // In case we have to project
     let exec_tree: Box<dyn Operator + 'a> = match cols {
-        ColumnList::All => Box::from(scan),
-        ColumnList::Listed(listed_cols) => Box::from(Project::new(listed_cols, Box::from(scan))?),
+        ColumnList::All => filterable_scan,
+        ColumnList::Listed(listed_cols) => Box::from(Project::new(listed_cols, filterable_scan)?),
     };
 
     Ok(exec_tree)
@@ -77,9 +97,7 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
                 .delete_table(table.name.as_str())
                 .map_err(|e| ExecErr::Storage(e))?;
         }
-        _ => {
-            unreachable!("DDL shouldn't be this");
-        }
+        _ => unreachable!("DDL shouldn't be this"),
     }
 
     Ok(())
@@ -172,17 +190,25 @@ fn expr_to_col_data(expr: ExprNode, target: Type) -> Result<ColData, ExecErr> {
                 let r_data = expr_to_col_data(*rhs, target)?;
                 Ok(l_data / r_data)
             }
-            // TODO: support Eq and Neq
-            OpExpr::Eq(_, _) | OpExpr::Neq(_, _) => {
-                unimplemented!("Have not implement == and != operator yet");
+            // TODO: support pred in insert here
+            OpExpr::Eq(_, _)
+            | OpExpr::Neq(_, _)
+            | OpExpr::GT(_, _)
+            | OpExpr::GTE(_, _)
+            | OpExpr::LT(_, _)
+            | OpExpr::LTE(_, _) => {
+                unimplemented!("Have not implement other operators yet");
             }
         },
         ExprNode::Literal(lit) => literal_to_col_data(lit, target),
+        ExprNode::Column(_) => {
+            unimplemented!("Have not implement insert with column yet");
+        }
     }
 }
 
 /// Convert literal value from user input to storage engine's ColData
-fn literal_to_col_data(literal: LiteralExpr, target: Type) -> Result<ColData, ExecErr> {
+pub fn literal_to_col_data(literal: LiteralExpr, target: Type) -> Result<ColData, ExecErr> {
     use LiteralExpr::*;
     let col_data = match literal {
         Int(i) => match target {
@@ -217,4 +243,71 @@ fn literal_to_col_data(literal: LiteralExpr, target: Type) -> Result<ColData, Ex
     };
 
     Ok(col_data)
+}
+
+/// Frequently used method for Row
+impl Row {
+    /// New Row with specified capacity for columns
+    pub fn with_capacity(cap: usize) -> Self {
+        Row {
+            data: Vec::with_capacity(cap),
+        }
+    }
+
+    /// New Row from provided column data
+    pub fn from(data: Vec<ColData>) -> Self {
+        Row { data }
+    }
+
+    /// Add col_data to row
+    pub fn push(&mut self, col_data: ColData) {
+        self.data.push(col_data)
+    }
+
+    pub fn num_cols(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Just iterator of column entry
+    pub fn iter(&self) -> Iter<'_, ColData> {
+        self.data.iter()
+    }
+}
+
+/// Frequently used method for Schema
+impl Schema {
+    pub fn with_capacity(cap: usize) -> Self {
+        Schema {
+            cols: Vec::with_capacity(cap),
+        }
+    }
+
+    /// New schema from the list of columns
+    pub fn from(cols: Vec<Column>) -> Self {
+        Schema { cols }
+    }
+
+    /// Add column to schema
+    pub fn push(&mut self, col: Column) {
+        self.cols.push(col)
+    }
+
+    pub fn num_cols(&self) -> usize {
+        self.cols.len()
+    }
+
+    /// Find the target column (index, type) by name
+    pub fn find_column(&self, name: &str) -> Option<(usize, Type)> {
+        for (idx, col) in self.cols.iter().enumerate() {
+            if col.name == name {
+                return Some((idx, col.col_type));
+            }
+        }
+        None
+    }
+
+    /// Just iterator of column entry
+    pub fn iter(&self) -> Iter<'_, Column> {
+        self.cols.iter()
+    }
 }

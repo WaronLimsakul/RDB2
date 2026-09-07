@@ -6,6 +6,7 @@ use crate::{
     storage::{EngineErr, Type, engine::StorageEngine},
 };
 
+mod filter;
 mod meta;
 mod project;
 pub mod query;
@@ -19,6 +20,7 @@ pub enum ExecErr {
     UnmatchedNumValues(usize, usize), // Expect <first usize> values, user provides <second usize> values,
     NonNumericType(Type),             // Found `Type` in a place that should be for numeric type
     InvalidType(Type, Type),          // Expect first `Type`, found the second `Type`
+    InvalidPredicate,                 // Not `col <op> literal` or `literal <op> col`
 }
 
 /// Execute non-metadata command
@@ -84,6 +86,10 @@ impl fmt::Display for ExecErr {
             }
             NonNumericType(got) => write!(f, "Expect numeric type, found {}", got),
             InvalidType(expect, got) => write!(f, "Expect {} type, found {}", expect, got),
+            InvalidPredicate => write!(
+                f,
+                "Invalid values in predicate, expect `column <op> literal` or `literal <op> column`"
+            ),
         }
     }
 }

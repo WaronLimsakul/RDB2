@@ -34,6 +34,7 @@ pub fn get_input(line_reader: &mut DefaultEditor) -> Result<Cmd, ParseErr> {
         Stmt::Select {
             table: _,
             columns: _,
+            conds: _,
         } => Cmd::DQL { ast, raw },
         Stmt::Insert {
             table: _,

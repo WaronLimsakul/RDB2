@@ -23,7 +23,7 @@ impl<'a> Project<'a> {
         projected: Vec<ColumnNode>,
         source: Box<dyn Operator + 'a>,
     ) -> Result<Self, ExecErr> {
-        let mut schema: Schema = Vec::with_capacity(projected.len());
+        let mut schema = Schema::with_capacity(projected.len());
         let mut indices: Vec<usize> = Vec::with_capacity(projected.len());
 
         let source_schema = source.schema();
@@ -46,10 +46,10 @@ impl<'a> Operator for Project<'a> {
     fn next(&mut self) -> Result<Option<Row>, ExecErr> {
         match self.source.next() {
             Ok(Some(row)) => {
-                let mut projected: Row = Vec::with_capacity(self.schema.len());
+                let mut projected = Row::with_capacity(self.schema.num_cols());
                 for idx in &self.indices {
                     // Has to clone, because sometimes, user select same column again
-                    projected.push(row[*idx].clone());
+                    projected.push(row.data[*idx].clone());
                 }
 
                 Ok(Some(projected))
@@ -65,7 +65,7 @@ impl<'a> Operator for Project<'a> {
 
 // Find index and type entry of schema from column
 fn get_col(schema: &Schema, target_col: &str) -> Option<(usize, Column)> {
-    for (i, col) in schema.iter().enumerate() {
+    for (i, col) in schema.cols.iter().enumerate() {
         if col.name == target_col {
             return Some((i, col.clone()));
         }

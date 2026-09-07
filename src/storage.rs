@@ -323,6 +323,24 @@ impl ops::Div for ColData {
     }
 }
 
+/// For overloading comparison op of Coldata
+impl PartialOrd for ColData {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        // Only compare if same type
+        use ColData::*;
+        match (self, other) {
+            (Int(l), Int(r)) => l.partial_cmp(r),
+            (Uint(l), Uint(r)) => l.partial_cmp(r),
+            (Long(l), Long(r)) => l.partial_cmp(r),
+            (Ulong(l), Ulong(r)) => l.partial_cmp(r),
+            (Float(l), Float(r)) => l.partial_cmp(r),
+            (String(l), String(r)) => l.partial_cmp(r),
+            (Bool(l), Bool(r)) => l.partial_cmp(r),
+            _ => None,
+        }
+    }
+}
+
 /// Key type with data
 // NOTE: derived impl says Uint < Ulong
 #[derive(PartialEq, PartialOrd, Debug, Clone, Copy)]

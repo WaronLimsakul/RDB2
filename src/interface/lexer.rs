@@ -13,6 +13,7 @@ pub enum LexErr {
     InvalidNumeric(char), // Found char in numeric expression
     InvalidChar(char),  // Just don't like this char, nothing much
     InvalidWord(char),  // Found the char in a word, not supposed to be there
+    EarlyTerm,          // End of string, expect something more
 }
 
 #[derive(Debug, PartialEq)]
@@ -26,7 +27,6 @@ pub enum TokenType {
 
 /// All reserved keywords
 // Change this -> change scan_word
-// TODO: do we even need this? Just use content?
 #[derive(Debug, PartialEq)]
 pub enum KeyWord {
     Select,
@@ -37,6 +37,7 @@ pub enum KeyWord {
     Insert,
     Describe,
     Delete,
+    Where,
 }
 
 // Literal values
@@ -58,6 +59,12 @@ pub enum Op {
     Div,
     Eq,
     Neq,
+    GT,
+    GTE,
+    LT,
+    LTE,
+    And, // &&
+    Or,  // ||
 }
 
 // Punctuation character in query
@@ -88,11 +95,11 @@ fn is_punctuation(c: char) -> bool {
 
 // Helper for punctuation character
 fn is_op(c: char) -> bool {
-    matches!(c, '+' | '-' | '*' | '/' | '=' | '!')
+    matches!(c, '+' | '-' | '*' | '/' | '=' | '!' | '<' | '>' | '&' | '|')
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(src: &'a str) -> Lexer {
+    pub fn new(src: &'a str) -> Lexer<'a> {
         Lexer {
             src,
             cursor: 0,
@@ -140,18 +147,6 @@ impl<'a> Lexer<'a> {
         let skip_len = self.src[self.cursor..].find(|c| !char::is_whitespace(c))?;
         self.cursor += skip_len;
         self.cur_char()
-    }
-
-    /// Move cursor until found whitespace or end
-    /// of string and return characters we skip.
-    fn to_whitespace(&mut self) -> &str {
-        let move_len = self.src[self.cursor..]
-            .find(char::is_whitespace)
-            .unwrap_or(self.src[self.cursor..].len());
-
-        let res = &self.src[self.cursor..self.cursor + move_len];
-        self.cursor += move_len;
-        res
     }
 
     // Get current character cursor point to
@@ -232,6 +227,36 @@ impl<'a> Lexer<'a> {
                 skip = 2; // '!' + '=' takes 2 bytes
                 TokenType::Op(Op::Neq)
             }
+            '>' => {
+                if self.next_char().ok_or(LexErr::EarlyTerm)? == '=' {
+                    skip = 2;
+                    TokenType::Op(Op::GTE)
+                } else {
+                    TokenType::Op(Op::GT)
+                }
+            }
+            '<' => {
+                if self.next_char().ok_or(LexErr::EarlyTerm)? == '=' {
+                    skip = 2;
+                    TokenType::Op(Op::LTE)
+                } else {
+                    TokenType::Op(Op::LT)
+                }
+            }
+            '&' => {
+                self.next_char()
+                    .filter(|&c| c == '&')
+                    .ok_or(LexErr::Expect('&', '\0'))?;
+                skip = 2;
+                TokenType::Op(Op::And)
+            }
+            '|' => {
+                self.next_char()
+                    .filter(|&c| c == '|')
+                    .ok_or(LexErr::Expect('|', '\0'))?;
+                skip = 2;
+                TokenType::Op(Op::And)
+            }
             _ => panic!("Expect operator character, but found {}", ch),
         };
 
@@ -311,6 +336,7 @@ impl<'a> Lexer<'a> {
             "insert" => TokenType::KeyWord(KeyWord::Insert),
             "describe" => TokenType::KeyWord(KeyWord::Describe),
             "delete" => TokenType::KeyWord(KeyWord::Delete),
+            "where" => TokenType::KeyWord(KeyWord::Where),
             "true" | "false" => TokenType::Literal(Literal::Bool),
             _ => TokenType::ID,
         };
@@ -340,6 +366,7 @@ impl fmt::Display for LexErr {
             }
             InvalidChar(ch) => write!(f, "Invalid character '{}' in query", ch),
             InvalidWord(found) => write!(f, "Invalid character '{}' in a word", found),
+            EarlyTerm => write!(f, "Expect something more"),
         }
     }
 }

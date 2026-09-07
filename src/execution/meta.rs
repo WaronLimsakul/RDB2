@@ -6,7 +6,7 @@
 use std::process;
 
 use crate::{
-    execution::query::Column,
+    execution::query::{Column, Row, Schema},
     interface::{MetaCmd, printer::PrintableTable, repl::output_table},
     storage::{ColData, EngineErr, Type, engine::StorageEngine},
 };
@@ -18,14 +18,14 @@ pub fn execute(cmd: MetaCmd, engine: &mut StorageEngine) -> Result<(), EngineErr
             process::exit(0);
         }
         MetaCmd::Tables => {
-            let schema = vec![Column {
+            let schema = Schema::from(vec![Column {
                 name: "table".to_string(),
                 col_type: Type::String,
-            }];
+            }]);
             let tables = engine
                 .list_tables()?
                 .into_iter()
-                .map(|table| vec![ColData::String(table)])
+                .map(|table| Row::from(vec![ColData::String(table)]))
                 .collect();
             let report = PrintableTable {
                 schema: &schema,

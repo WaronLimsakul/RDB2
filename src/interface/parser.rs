@@ -21,6 +21,7 @@ pub enum Stmt {
     Select {
         table: TableNode,
         columns: ColumnList,
+        conds: WhereNode,
     }, // table = Table, columns = Vec<Column>
     Insert {
         table: TableNode,
@@ -51,16 +52,23 @@ pub struct ColumnNode {
     pub name: String,
 }
 
+// Represent all the `where` clause
+#[derive(Debug, PartialEq)]
+pub struct WhereNode {
+    pub preds: Vec<ExprNode>, // requires: ExprNode must be .is_pred()
+}
+
 // Row value provided in "insert" statement
 #[derive(Debug, PartialEq)]
 pub struct RowValueNode {
     pub values: Vec<ExprNode>,
 }
 
-// Reprent any expression for row value (for now)
+// Reprent any value expression
 #[derive(Debug, PartialEq)]
 pub enum ExprNode {
     Literal(LiteralExpr),
+    Column(ColumnNode),
     Op(OpExpr),
 }
 
@@ -72,18 +80,26 @@ pub enum LiteralExpr {
     Float(f64),
 }
 
+// Constant expression with operation.
 // Change this -> change
 // - parser::parse_expr
 // - lexer::Op
 // - query::expr_to_col_data
 #[derive(Debug, PartialEq)]
 pub enum OpExpr {
+    // Only numerical for now
     Plus(Box<ExprNode>, Box<ExprNode>),
     Minus(Box<ExprNode>, Box<ExprNode>),
     Mult(Box<ExprNode>, Box<ExprNode>),
     Div(Box<ExprNode>, Box<ExprNode>),
+
+    // Only Predicate for now
     Eq(Box<ExprNode>, Box<ExprNode>),
     Neq(Box<ExprNode>, Box<ExprNode>),
+    GT(Box<ExprNode>, Box<ExprNode>),
+    GTE(Box<ExprNode>, Box<ExprNode>),
+    LT(Box<ExprNode>, Box<ExprNode>),
+    LTE(Box<ExprNode>, Box<ExprNode>),
 }
 
 pub struct ParseTree {
@@ -143,6 +159,13 @@ impl<'a> Parser<'a> {
         // Parse table name
         let table = self.parse_table()?;
 
+        // Parse where clause if exists
+        let where_node = if self.peek_token()?.token_type == TokenType::KeyWord(KeyWord::Where) {
+            self.parse_where_clause()?
+        } else {
+            WhereNode { preds: vec![] }
+        };
+
         // Last token must be ';'
         let last_token = self.next_token()?;
         if last_token.token_type != TokenType::Punc(Punc::Semi) {
@@ -152,6 +175,7 @@ impl<'a> Parser<'a> {
         let select = Stmt::Select {
             table,
             columns: column_list,
+            conds: where_node,
         };
         Ok(select)
     }
@@ -357,11 +381,13 @@ impl<'a> Parser<'a> {
 
     // Grammar: constant value expression. Can be
     // - '(' Expr ')'
-    // - <Expr> Operator <Expr>
+    // - Column expression
     // - Literal expression
+    // - <Expr> Operator <Expr>
     fn parse_expr(&mut self) -> Result<ExprNode, ParseErr> {
         let first_token = self.peek_token()?;
         match first_token.token_type {
+            // '(' Expr ')'
             TokenType::Punc(Punc::LParen) => {
                 self.next_token()?; // Pop '('
                 let res = self.parse_expr()?;
@@ -371,6 +397,9 @@ impl<'a> Parser<'a> {
                 }
                 Ok(res)
             }
+            // Column expression
+            TokenType::ID => Ok(ExprNode::Column(self.parse_column()?)),
+            // Literal expression
             TokenType::Literal(_) | TokenType::Op(Op::Minus) => {
                 let literal = self.parse_literal_expr()?;
                 let next_token = self.peek_token()?;
@@ -409,7 +438,7 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 return Err(ParseErr::Expect(
-                    "Const expression",
+                    "Expression",
                     self.next_token()? /*first_token*/
                         .content,
                 ));
@@ -561,6 +590,57 @@ impl<'a> Parser<'a> {
         Ok(col_type)
     }
 
+    // Grammar: where <pred1> && <pred2> && ...
+    // - pred = see parse_predicate
+    // TODO: support `or` later
+    fn parse_where_clause(&mut self) -> Result<WhereNode, ParseErr> {
+        debug_assert_eq!(
+            self.peek_token()?.token_type,
+            TokenType::KeyWord(KeyWord::Where)
+        );
+
+        self.next_token()?; // Pop 'where'
+
+        let mut preds: Vec<ExprNode> = Vec::new();
+        loop {
+            preds.push(self.parse_predicate()?);
+            if self.peek_token()?.token_type != TokenType::Op(Op::And) {
+                break;
+            }
+            self.next_token()?; // Pop '&&'
+        }
+
+        Ok(WhereNode { preds })
+    }
+
+    // Grammar: <expr> op_pred <expr>
+    // - op_pred = op token that is_predable()
+    // TODO: deal with nested condition
+    fn parse_predicate(&mut self) -> Result<ExprNode, ParseErr> {
+        let lhs = self.parse_expr()?;
+        let op_token = self.next_token()?;
+        if !is_predable(&op_token) {
+            return Err(ParseErr::Expect(
+                "Predicate-able operator",
+                op_token.content,
+            ));
+        }
+        let rhs = self.parse_expr()?;
+        let op_expr = match op_token.token_type {
+            TokenType::Op(op) => match op {
+                Op::Eq => OpExpr::Eq(Box::from(lhs), Box::from(rhs)),
+                Op::Neq => OpExpr::Neq(Box::from(lhs), Box::from(rhs)),
+                Op::GT => OpExpr::GT(Box::from(lhs), Box::from(rhs)),
+                Op::GTE => OpExpr::GTE(Box::from(lhs), Box::from(rhs)),
+                Op::LT => OpExpr::LT(Box::from(lhs), Box::from(rhs)),
+                Op::LTE => OpExpr::LTE(Box::from(lhs), Box::from(rhs)),
+                _ => unreachable!("Shouldn't be non predable op here because is_predable()"),
+            },
+            _ => unreachable!("Shouldn't be non predable op here because is_predable()"),
+        };
+        Ok(ExprNode::Op(op_expr))
+    }
+
     // Helper for peeking next token from lexer. Return error if none found
     fn peek_token(&mut self) -> Result<&Token, ParseErr> {
         self.lexer
@@ -617,11 +697,37 @@ impl fmt::Display for LiteralExpr {
     }
 }
 
+impl OpExpr {
+    /// Whether this operator expression represent predicate
+    // TODO: might be pred or something else in the future
+    // change this -> change is_predable, parse_predicate
+    pub fn is_pred(&self) -> bool {
+        use OpExpr::*;
+        match self {
+            Eq(_, _) | Neq(_, _) | GT(_, _) | GTE(_, _) | LT(_, _) | LTE(_, _) => true,
+            _ => false,
+        }
+    }
+}
+
+// Static helper to check if this token is operator that can
+// be use in a predicate (not include the logical operator).
+// change this -> change parse_predicate, OpExpr::is_pred
+fn is_predable(token: &Token) -> bool {
+    match &token.token_type {
+        TokenType::Op(op) => match op {
+            Op::Eq | Op::Neq | Op::GT | Op::GTE | Op::LT | Op::LTE => true,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 mod tests {
     use super::*;
 
     #[test]
-    fn parse_select() {
+    fn parse_basic_select() {
         let mut parser = Parser::new("select c1, c2, c3 from foo;");
         let stmt = parser.parse().unwrap().root;
 
@@ -630,6 +736,7 @@ mod tests {
             Stmt::Select {
                 table: _,
                 columns: _,
+                conds: _,
             }
         ));
 
@@ -647,9 +754,44 @@ mod tests {
                 name: "c3".to_string(),
             },
         ]);
-        if let Stmt::Select { table, columns } = stmt {
+        if let Stmt::Select {
+            table,
+            columns,
+            conds: _,
+        } = stmt
+        {
             assert_eq!(table, expected_table);
             assert_eq!(columns, expected_columns);
+        }
+    }
+
+    #[test]
+    fn parse_select_where() {
+        let mut parser = Parser::new("select * from Foo where c1 = 2;");
+        let stmt = parser.parse().unwrap().root;
+        assert!(matches!(
+            stmt,
+            Stmt::Select {
+                table: _,
+                columns: _,
+                conds: _
+            }
+        ));
+
+        let expected_conds = WhereNode {
+            preds: vec![ExprNode::Op(OpExpr::Eq(
+                Box::new(expr_node_col("c1")),
+                Box::new(lit_node_int(2)),
+            ))],
+        };
+
+        if let Stmt::Select {
+            table: _,
+            columns: _,
+            conds,
+        } = stmt
+        {
+            assert_eq!(conds, expected_conds);
         }
     }
 
@@ -743,17 +885,9 @@ mod tests {
         }
     }
 
-    // Helper for parse_op_expr
-    fn lit_node_int(v: i64) -> ExprNode {
-        ExprNode::Literal(LiteralExpr::Int(v))
-    }
-    fn lit_node_str(s: &'static str) -> ExprNode {
-        ExprNode::Literal(LiteralExpr::String(s.to_string()))
-    }
-
     #[test]
     fn parse_op_expr() {
-        let mut parser = Parser::new("insert Foo (1+(2-3), 'hello' != 'world'):");
+        let mut parser = Parser::new("insert Foo (1+(2-3), 'hello' != 'world');");
         let stmt = parser.parse().unwrap().root;
 
         assert!(matches!(
@@ -785,5 +919,17 @@ mod tests {
         if let Stmt::Insert { table: _, values } = stmt {
             assert_eq!(expected_values, values);
         }
+    }
+
+    fn lit_node_int(v: i64) -> ExprNode {
+        ExprNode::Literal(LiteralExpr::Int(v))
+    }
+    fn lit_node_str(s: &'static str) -> ExprNode {
+        ExprNode::Literal(LiteralExpr::String(s.to_string()))
+    }
+    fn expr_node_col(c: &'static str) -> ExprNode {
+        ExprNode::Column(ColumnNode {
+            name: c.to_string(),
+        })
     }
 }
