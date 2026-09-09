@@ -9,7 +9,7 @@ use std::{
 
 use crate::storage::{
     EngineErr::{self, *},
-    PAGE_HEADER_SIZE, PAGE_SIZE,
+    PAGE_SIZE,
     node::Page,
 };
 

@@ -126,17 +126,17 @@ impl StorageEngine {
     }
 
     /// Return Iterator of each row data
-    pub fn get_all_rows(&mut self, table_name: &str) -> Result<RowCursor, EngineErr> {
+    pub fn get_all_rows(&mut self, table_name: &str) -> Result<RowCursor<'_>, EngineErr> {
         let table = self.get_table_mut(table_name)?;
         Ok(table.get_all_rows())
     }
 
-    /// Find a row with that key, returns None if row not found
+    /// Find a row with that key, return the one minimum higher if not found
     pub fn find_row_by_key(
         &mut self,
         table_name: &str,
         key: KeyData,
-    ) -> Result<Option<RowData>, EngineErr> {
+    ) -> Result<RowCursor<'_>, EngineErr> {
         let table = self.get_table_mut(table_name)?;
         Ok(table.find_row_by_key(key))
     }
@@ -248,7 +248,8 @@ mod tests {
         assert_eq!(rows[2].key, KeyData::Uint(3));
     }
 
-    /// Insert rows, then find by key — existing key returns Some, missing returns None.
+    /// find_row_by_key returns a cursor positioned at the first row with key >= target:
+    /// an exact key lands on that row, a gap lands on the next row up, above-max is empty.
     #[test]
     fn test_find_by_key() {
         let dir = setup_test_dir("find_by_key");
@@ -260,12 +261,23 @@ mod tests {
             .unwrap();
         engine.insert_row("test", make_row(20, "Bob", 25)).unwrap();
 
-        let found = engine.find_row_by_key("test", KeyData::Uint(10)).unwrap();
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().key, KeyData::Uint(10));
+        // Exact key: cursor starts on that row
+        let found = engine
+            .find_row_by_key("test", KeyData::Uint(10))
+            .unwrap()
+            .next();
+        assert_eq!(found.unwrap().unwrap().key, KeyData::Uint(10));
 
-        let missing = engine.find_row_by_key("test", KeyData::Uint(99)).unwrap();
-        assert!(missing.is_none());
+        // Key between two rows: cursor starts on the next row up
+        let found = engine
+            .find_row_by_key("test", KeyData::Uint(15))
+            .unwrap()
+            .next();
+        assert_eq!(found.unwrap().unwrap().key, KeyData::Uint(20));
+
+        // Key above the max: empty cursor
+        let mut cursor = engine.find_row_by_key("test", KeyData::Uint(99)).unwrap();
+        assert!(cursor.next().is_none());
     }
 
     /// Insert same key twice — second insert yields Err(RowExists).
@@ -334,23 +346,28 @@ mod tests {
             );
         }
 
-        // Verify random single-key lookups
-        let found = engine.find_row_by_key("test", KeyData::Uint(1)).unwrap();
-        assert!(found.is_some(), "Should find key 1");
+        // Point lookups land exactly on existing keys, even after splits
+        for key in [1u32, 50, num_rows as u32] {
+            let found = engine
+                .find_row_by_key("test", KeyData::Uint(key))
+                .unwrap()
+                .next();
+            assert_eq!(
+                found.unwrap().unwrap().key,
+                KeyData::Uint(key),
+                "Seek should land on existing key {key}"
+            );
+        }
 
-        let found = engine
-            .find_row_by_key("test", KeyData::Uint(num_rows as u32))
-            .unwrap();
-        assert!(found.is_some(), "Should find key {num_rows}");
-
-        let found = engine.find_row_by_key("test", KeyData::Uint(50)).unwrap();
-        assert!(found.is_some(), "Should find key 50");
-
-        let missing = engine.find_row_by_key("test", KeyData::Uint(999)).unwrap();
-        assert!(missing.is_none(), "Key 999 should not exist");
+        // Seeking above the maximum key yields an empty cursor
+        let mut missing = engine.find_row_by_key("test", KeyData::Uint(999)).unwrap();
+        assert!(
+            missing.next().is_none(),
+            "Key 999 should have no row at or after it"
+        );
     }
 
-    /// Fresh table with no rows — get_all_rows yields empty, find returns None.
+    /// Fresh table with no rows — get_all_rows yields empty, find yields an empty cursor.
     #[test]
     fn test_empty_table() {
         let dir = setup_test_dir("empty_table");
@@ -361,8 +378,11 @@ mod tests {
         let rows: Vec<RowData> = cursor.collect::<Result<Vec<_>, _>>().unwrap();
         assert!(rows.is_empty());
 
-        let found = engine.find_row_by_key("test", KeyData::Uint(1)).unwrap();
-        assert!(found.is_none());
+        let mut seek_cursor = engine.find_row_by_key("test", KeyData::Uint(1)).unwrap();
+        assert!(
+            seek_cursor.next().is_none(),
+            "Empty table should yield no rows"
+        );
     }
 
     /// Flush table to disk, then open a fresh engine on the same directory

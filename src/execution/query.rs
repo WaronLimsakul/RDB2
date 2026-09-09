@@ -6,9 +6,17 @@
 use std::slice::Iter;
 
 use crate::{
-    execution::{ExecErr, filter::Filter, project::Project, scan::Scan},
+    execution::{
+        ExecErr,
+        filter::{Filter, PredOp},
+        project::Project,
+        scan::{Scan, ScanOption},
+    },
     interface::parser::{ColumnList, ExprNode, LiteralExpr, OpExpr, ParseTree, RowValueNode, Stmt},
-    storage::{ColData, RecData, RowData, Type, engine::StorageEngine, table::TableSchema},
+    storage::{
+        ColData, KeyData, KeyType, RecData, RowData, Type, engine::StorageEngine,
+        table::TableSchema,
+    },
 };
 
 // Something like storange's TableSchema, but we don't care
@@ -62,11 +70,28 @@ pub fn execute_dql<'a>(
         panic!("Should always be select statement");
     };
 
+    // In case we are filtering by primary key:
+    // can tell storage engine to go there directly
+    let (key_name, key_type) = &engine
+        .get_schema(&table.name)
+        .map_err(|e| ExecErr::Storage(e))?
+        .key;
+    let key_preds = find_key_preds(&conds.preds, key_name, key_type.clone())?;
+
+    // TODO: support multiple key predicates
+    let scan_opt = ScanOption {
+        key: if !key_preds.is_empty() {
+            Some(key_preds[0].1)
+        } else {
+            None
+        },
+    };
+
     // Build execution tree from here
     // TODO: Might have to refactor it to somewhere else
 
     // Always start with scan
-    let scan = Box::from(Scan::new(&table.name, engine)?);
+    let scan = Box::from(Scan::new(&table.name, scan_opt, engine)?);
 
     // In case we have to filter
     let filterable_scan: Box<dyn Operator + 'a> = if !conds.preds.is_empty() {
@@ -243,6 +268,42 @@ pub fn literal_to_col_data(literal: LiteralExpr, target: Type) -> Result<ColData
     };
 
     Ok(col_data)
+}
+
+/// Helper for DQL. Parse PK related predicate.
+fn find_key_preds(
+    preds: &Vec<ExprNode>,
+    key_name: &str,
+    key_type: KeyType,
+) -> Result<Vec<(PredOp, KeyData)>, ExecErr> {
+    let mut res: Vec<(PredOp, KeyData)> = Vec::new();
+    for pred in preds {
+        match pred {
+            ExprNode::Op(op) => match op {
+                // NOTE: only support =, >=, > for now.
+                OpExpr::Eq(lhs, rhs) | OpExpr::GT(lhs, rhs) | OpExpr::GTE(lhs, rhs) => {
+                    match (&**lhs, &**rhs) {
+                        (ExprNode::Column(col), ExprNode::Literal(lit))
+                        | (ExprNode::Literal(lit), ExprNode::Column(col)) => {
+                            if col.name == key_name {
+                                res.push((
+                                    op.into(),
+                                    literal_to_col_data(lit.clone(), key_type.into())?
+                                        .try_into()
+                                        .map_err(|e| ExecErr::Storage(e))?,
+                                ));
+                            }
+                        }
+                        _ => unreachable!("Should found a column in pred"),
+                    }
+                }
+                _ => unreachable!("Shouldn't found non-pred op in pred"),
+            },
+            _ => unreachable!("Shouldn't found non-op expression in pred"),
+        }
+    }
+
+    Ok(res)
 }
 
 /// Frequently used method for Row

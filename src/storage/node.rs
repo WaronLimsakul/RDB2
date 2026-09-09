@@ -256,7 +256,6 @@ impl Page {
             "try_cell() called with LEFTMOST_CHILD_CELL_IDX"
         );
 
-        let num_cells = self.num_cells();
         if index >= self.num_cells() {
             return None;
         }
@@ -317,7 +316,7 @@ impl Page {
 
     /// Find pointer position from provided id. The pointer point to
     /// cell with that id or where it should be were to insert
-    fn search_cell_leaf(&self, key: KeyData) -> u16 {
+    pub fn search_cell_leaf(&self, key: KeyData) -> u16 {
         let mut l = 0;
         let mut r = self.num_cells();
 

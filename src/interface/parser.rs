@@ -72,7 +72,7 @@ pub enum ExprNode {
     Op(OpExpr),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum LiteralExpr {
     String(String),
     Bool(bool),
@@ -443,7 +443,6 @@ impl<'a> Parser<'a> {
                             TokenType::Op(Op::Neq) => {
                                 OpExpr::Neq(Box::new(literal), Box::new(r_literal))
                             }
-                            // TODO NOW: delete if not works
                             _ => {
                                 return Err(ParseErr::Expect("Operator", op.content));
                             }

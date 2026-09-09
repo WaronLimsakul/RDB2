@@ -21,7 +21,7 @@ pub struct Filter<'a> {
 // Should interpret as: `<col> <op> <other>`
 // e.g. col = c1, op = GT, other = 2 => "c1 > 2"
 // requires: col and other should already have same type
-struct Predicate {
+pub struct Predicate {
     col: String,    // One of them must be column, otherwise, what's the point?
     op: PredOp,     // We have our own pred enum
     other: ColData, // Literal for now
@@ -31,7 +31,7 @@ struct Predicate {
 }
 
 /// Predicate's enum of operator.
-enum PredOp {
+pub enum PredOp {
     Eq,
     Neq,
     GT,

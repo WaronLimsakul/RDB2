@@ -20,6 +20,13 @@ impl<'a> RowCursor<'a> {
     pub fn schema(&self) -> &TableSchema {
         self.schema
     }
+
+    /// Set the pointed page and cell for underlying cursor
+    /// Use in case the caller what to start at a specific row.
+    pub fn set(mut self, page_id: u32, cell_idx: u16) -> Self {
+        self.cursor.set(page_id, cell_idx);
+        self
+    }
 }
 
 impl Iterator for RowCursor<'_> {

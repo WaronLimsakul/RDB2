@@ -23,6 +23,36 @@ impl<'a> Cursor<'a> {
             init: false,
         }
     }
+
+    /// Set cursor page and cell if want to start somewhere else
+    // requires: page must be leaf and 0 <= cell_idx <= num_cells()
+    pub fn set(&mut self, page_id: u32, cell_idx: u16) {
+        debug_assert!(self.pager.page(page_id).unwrap().is_leaf());
+        debug_assert!(0 <= cell_idx && cell_idx <= self.pager.page(page_id).unwrap().num_cells());
+
+        self.page_id = page_id;
+        self.cell_idx = cell_idx;
+        self.cur_page = self.pager.take_page(page_id);
+        self.init = true;
+
+        // If no cur_page, done. No need for setting up.
+        if self.cur_page.is_none() {
+            return;
+        }
+
+        // In case cell_idx exceed cell in page (only case is when at last leaf node),
+        // we will move on to next page, which should be null node.
+        let page = self.cur_page.unwrap();
+        if cell_idx >= page.num_cells() {
+            let next_page_id = page.next_node_id();
+            self.pager.reg_page_with_id(page, self.page_id); // return back the page
+            self.page_id = next_page_id;
+            self.cell_idx = 0;
+            self.cur_page = None;
+        } else {
+            self.cur_page = Some(page);
+        }
+    }
 }
 
 impl Iterator for Cursor<'_> {
@@ -76,5 +106,17 @@ impl Iterator for Cursor<'_> {
 
         // Return what we prepared
         Some((key, val))
+    }
+}
+
+impl Drop for Cursor<'_> {
+    // In case the page is staled and Cursor got drop,
+    // we have to register the page back to pager
+    fn drop(&mut self) {
+        if self.cur_page.is_some() {
+            let page = self.cur_page.unwrap();
+            self.cur_page = None;
+            self.pager.reg_page_with_id(page, self.page_id);
+        }
     }
 }

@@ -9,21 +9,38 @@ use crate::{
         ExecErr,
         query::{Column, Operator, Row, Schema},
     },
-    storage::{RowData, engine::StorageEngine, row_cursor::RowCursor, table::TableSchema},
+    storage::{KeyData, RowData, engine::StorageEngine, row_cursor::RowCursor, table::TableSchema},
 };
 
 pub struct Scan<'a> {
     source: RowCursor<'a>,
     schema: Schema,
+    option: ScanOption,
+}
+
+/// Option for creating a scan operator
+pub struct ScanOption {
+    pub key: Option<KeyData>, // in case we filter with primary key, scan can use storage index
 }
 
 impl<'a> Scan<'a> {
-    pub fn new(table: &str, engine: &'a mut StorageEngine) -> Result<Self, ExecErr> {
-        let source = engine
-            .get_all_rows(table)
-            .map_err(|e| ExecErr::Storage(e))?;
+    pub fn new(
+        table: &str,
+        option: ScanOption,
+        engine: &'a mut StorageEngine,
+    ) -> Result<Self, ExecErr> {
+        let source = if option.key.is_some() {
+            engine.find_row_by_key(table, option.key.unwrap())
+        } else {
+            engine.get_all_rows(table)
+        }
+        .map_err(|e| ExecErr::Storage(e))?;
         let schema = storage_to_exec_schema(source.schema());
-        let res = Scan { source, schema };
+        let res = Scan {
+            source,
+            schema,
+            option,
+        };
         Ok(res)
     }
 

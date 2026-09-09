@@ -12,6 +12,7 @@ mod project;
 pub mod query;
 mod scan;
 
+#[derive(Debug)]
 pub enum ExecErr {
     Storage(EngineErr),               // Something wrong happen in storage engine
     InvalidColName(String),           // Invalid column name

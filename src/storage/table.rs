@@ -263,21 +263,24 @@ impl Table {
     }
 
     /// Return cursor that iterator over all rows
-    pub fn get_all_rows(&mut self) -> RowCursor {
-        RowCursor::new(&mut self.pager, self.root_id, &self.schema)
+    pub fn get_all_rows(&mut self) -> RowCursor<'_> {
+        self.new_row_cursor()
     }
 
-    /// Return the row that contain the target key if found
-    pub fn find_row_by_key(&mut self, key: KeyData) -> Option<RowData> {
+    /// Return the row cursor that points to the row with target key
+    /// NOTE: if call .next(), will still return next row.
+    pub fn find_row_by_key(&mut self, key: KeyData) -> RowCursor<'_> {
         if self.pager.num_pages() == 0 {
-            return None;
+            // Just empty rowcursor
+            return self.new_row_cursor();
         }
 
         let path = self.traverse_to_key(key).unwrap();
-        let page = self.pager.page(*path.last().unwrap())?;
-        let cell_val = page.leaf_get_cell_by_key(key)?;
-        let vals = self.schema.decode_val(&cell_val).ok()?;
-        Some(RowData { key, vals })
+        let (page_id, cell_idx) = {
+            let page = self.pager.page(*path.last().unwrap()).unwrap();
+            (page.id(), page.search_cell_leaf(key))
+        };
+        self.new_row_cursor().set(page_id, cell_idx)
     }
 
     /// Flush all the change that happen to table to disk
@@ -505,6 +508,11 @@ impl Table {
                 _ => Ok(()),
             }
         }
+    }
+
+    /// Helper to create new row cursor start from first cell of the table
+    fn new_row_cursor(&mut self) -> RowCursor {
+        RowCursor::new(&mut self.pager, self.root_id, &self.schema)
     }
 }
 
