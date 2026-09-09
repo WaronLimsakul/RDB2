@@ -335,6 +335,7 @@ impl<'a> Lexer<'a> {
             "primary" => TokenType::KeyWord(KeyWord::Primary),
             "insert" => TokenType::KeyWord(KeyWord::Insert),
             "describe" => TokenType::KeyWord(KeyWord::Describe),
+            "desc" => TokenType::KeyWord(KeyWord::Describe),
             "delete" => TokenType::KeyWord(KeyWord::Delete),
             "where" => TokenType::KeyWord(KeyWord::Where),
             "true" | "false" => TokenType::Literal(Literal::Bool),

@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, ops};
 
 use crate::{
     interface::lexer::{KeyWord, LexErr, Lexer, Literal, Op, Punc, Token, TokenType},
@@ -32,6 +32,9 @@ pub enum Stmt {
         schema: TableSchema, // Will just use engine's schema right away
     },
     Delete {
+        table: TableNode,
+    },
+    Describe {
         table: TableNode,
     },
 }
@@ -126,6 +129,7 @@ impl<'a> Parser<'a> {
             TokenType::KeyWord(KeyWord::Insert) => self.parse_insert_stmt()?,
             TokenType::KeyWord(KeyWord::New) => self.parse_new_stmt()?,
             TokenType::KeyWord(KeyWord::Delete) => self.parse_delete_stmt()?,
+            TokenType::KeyWord(KeyWord::Describe) => self.parse_describe_stmt()?,
             _ => {
                 return Err(ParseErr::Expect(
                     "First token of type: select/insert/new",
@@ -265,9 +269,31 @@ impl<'a> Parser<'a> {
 
         // Last token must be ';'
         let last_token = self.next_token()?;
-        if last_token.token_type != TokenType::Punc(Punc::Semi) {}
+        if last_token.token_type != TokenType::Punc(Punc::Semi) {
+            return Err(ParseErr::Expect(";", last_token.content));
+        }
 
         let stmt = Stmt::Delete { table };
+        Ok(stmt)
+    }
+
+    // Grammar: `describe <table>`
+    fn parse_describe_stmt(&mut self) -> Result<Stmt, ParseErr> {
+        debug_assert_eq!(
+            self.peek_token()?.token_type,
+            TokenType::KeyWord(KeyWord::Describe)
+        );
+
+        self.next_token()?; // Pop 'describe'
+        let table = self.parse_table()?;
+
+        // Last token must be ';'
+        let last_token = self.next_token()?;
+        if last_token.token_type != TokenType::Punc(Punc::Semi) {
+            return Err(ParseErr::Expect(";", last_token.content));
+        }
+
+        let stmt = Stmt::Describe { table };
         Ok(stmt)
     }
 
@@ -398,10 +424,14 @@ impl<'a> Parser<'a> {
                 Ok(res)
             }
             // Column expression
-            TokenType::ID => Ok(ExprNode::Column(self.parse_column()?)),
+            // TokenType::ID => Ok(ExprNode::Column(self.parse_column()?)),
             // Literal expression (and might be chained with operator)
-            TokenType::Literal(_) | TokenType::Op(Op::Minus) => {
-                let literal = self.parse_literal_expr()?;
+            TokenType::ID | TokenType::Literal(_) | TokenType::Op(Op::Minus) => {
+                let lhs = if first_token.token_type == TokenType::ID {
+                    ExprNode::Column(self.parse_column()?)
+                } else {
+                    self.parse_literal_expr()?
+                };
                 let next_token = self.peek_token()?;
 
                 // && and || operator are not recursive for now
@@ -410,46 +440,38 @@ impl<'a> Parser<'a> {
                     next_token.token_type,
                     TokenType::Op(Op::And) | TokenType::Op(Op::Or)
                 ) {
-                    return Ok(literal);
+                    return Ok(lhs);
                 }
 
                 // parse_expr won't parse the predicate level expression for now
                 // TODO: parse all predicate level expression
-                if is_predable(&next_token) {
-                    return Ok(literal);
-                }
+                // if is_predable(&next_token) {
+                //     return Ok(lhs);
+                // }
 
                 // NOTE: for now, we only guarantee correctness if they use parentheses
                 match next_token.token_type {
                     TokenType::Op(_) => {
                         let op = self.next_token()?;
-                        let r_literal = self.parse_expr()?;
+                        let rhs = self.parse_expr()?;
                         let op_expr = match op.token_type {
-                            TokenType::Op(Op::Plus) => {
-                                OpExpr::Plus(Box::new(literal), Box::new(r_literal))
-                            }
-                            TokenType::Op(Op::Minus) => {
-                                OpExpr::Minus(Box::new(literal), Box::new(r_literal))
-                            }
-                            TokenType::Op(Op::Star) => {
-                                OpExpr::Mult(Box::new(literal), Box::new(r_literal))
-                            }
-                            TokenType::Op(Op::Div) => {
-                                OpExpr::Div(Box::new(literal), Box::new(r_literal))
-                            }
-                            TokenType::Op(Op::Eq) => {
-                                OpExpr::Eq(Box::new(literal), Box::new(r_literal))
-                            }
-                            TokenType::Op(Op::Neq) => {
-                                OpExpr::Neq(Box::new(literal), Box::new(r_literal))
-                            }
+                            TokenType::Op(Op::Plus) => OpExpr::Plus(Box::new(lhs), Box::new(rhs)),
+                            TokenType::Op(Op::Minus) => OpExpr::Minus(Box::new(lhs), Box::new(rhs)),
+                            TokenType::Op(Op::Star) => OpExpr::Mult(Box::new(lhs), Box::new(rhs)),
+                            TokenType::Op(Op::Div) => OpExpr::Div(Box::new(lhs), Box::new(rhs)),
+                            TokenType::Op(Op::Eq) => OpExpr::Eq(Box::new(lhs), Box::new(rhs)),
+                            TokenType::Op(Op::Neq) => OpExpr::Neq(Box::new(lhs), Box::new(rhs)),
+                            TokenType::Op(Op::GT) => OpExpr::GT(Box::new(lhs), Box::new(rhs)),
+                            TokenType::Op(Op::GTE) => OpExpr::GTE(Box::new(lhs), Box::new(rhs)),
+                            TokenType::Op(Op::LT) => OpExpr::LT(Box::new(lhs), Box::new(rhs)),
+                            TokenType::Op(Op::LTE) => OpExpr::LTE(Box::new(lhs), Box::new(rhs)),
                             _ => {
                                 return Err(ParseErr::Expect("Operator", op.content));
                             }
                         };
                         Ok(ExprNode::Op(op_expr))
                     }
-                    _ => Ok(literal),
+                    _ => Ok(lhs),
                 }
             }
             _ => {
@@ -629,33 +651,25 @@ impl<'a> Parser<'a> {
         Ok(WhereNode { preds })
     }
 
-    // Grammar: <expr> op_pred <expr>
-    // - op_pred = op token that is_predable()
-    // - for now, both `expr` should not have op_pred inside
+    // Grammar: <expr> that is <pred_op>
+    // - pred_op = OpExpr that .is_pred
     // TODO: deal with nested condition
     fn parse_predicate(&mut self) -> Result<ExprNode, ParseErr> {
-        let lhs = self.parse_expr()?;
-        let op_token = self.next_token()?;
-        if !is_predable(&op_token) {
+        let pred = self.parse_expr()?;
+
+        // check if operator is predicate-able
+        if let ExprNode::Op(op) = &pred {
+            if !op.is_pred() {
+                return Err(ParseErr::Expect("Predicate operator", format!("{op}")));
+            }
+        } else {
             return Err(ParseErr::Expect(
-                "Predicate-able operator",
-                op_token.content,
+                "Operator Expression in predicate",
+                "Something else".to_string(),
             ));
         }
-        let rhs = self.parse_expr()?;
-        let op_expr = match op_token.token_type {
-            TokenType::Op(op) => match op {
-                Op::Eq => OpExpr::Eq(Box::from(lhs), Box::from(rhs)),
-                Op::Neq => OpExpr::Neq(Box::from(lhs), Box::from(rhs)),
-                Op::GT => OpExpr::GT(Box::from(lhs), Box::from(rhs)),
-                Op::GTE => OpExpr::GTE(Box::from(lhs), Box::from(rhs)),
-                Op::LT => OpExpr::LT(Box::from(lhs), Box::from(rhs)),
-                Op::LTE => OpExpr::LTE(Box::from(lhs), Box::from(rhs)),
-                _ => unreachable!("Shouldn't be non predable op here because is_predable()"),
-            },
-            _ => unreachable!("Shouldn't be non predable op here because is_predable()"),
-        };
-        Ok(ExprNode::Op(op_expr))
+
+        Ok(pred)
     }
 
     // Helper for peeking next token from lexer. Return error if none found
@@ -714,6 +728,80 @@ impl fmt::Display for LiteralExpr {
     }
 }
 
+//
+// Numerical operator and comparison for literal expr:
+// sometimes, we don't know the target type to convert
+// to ColData, so we have to do calculation on raw expr.
+//
+
+impl ops::Add for LiteralExpr {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        use LiteralExpr::*;
+        match (self, rhs) {
+            (Int(lhs), Int(rhs)) => Int(lhs + rhs),
+            (Float(lhs), Float(rhs)) => Float(lhs + rhs),
+            (Int(lhs), Float(rhs)) => Float(lhs as f64 + rhs),
+            (Float(lhs), Int(rhs)) => Float(lhs + rhs as f64),
+            _ => panic!("Add non-numeric or not same type"),
+        }
+    }
+}
+
+impl ops::Sub for LiteralExpr {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        use LiteralExpr::*;
+        match (self, rhs) {
+            (Int(lhs), Int(rhs)) => Int(lhs - rhs),
+            (Float(lhs), Float(rhs)) => Float(lhs - rhs),
+            (Int(lhs), Float(rhs)) => Float(lhs as f64 - rhs),
+            (Float(lhs), Int(rhs)) => Float(lhs - rhs as f64),
+            _ => panic!("Subtract non-numeric or not same type"),
+        }
+    }
+}
+
+impl ops::Mul for LiteralExpr {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self::Output {
+        use LiteralExpr::*;
+        match (self, rhs) {
+            (Int(lhs), Int(rhs)) => Int(lhs * rhs),
+            (Float(lhs), Float(rhs)) => Float(lhs * rhs),
+            (Int(lhs), Float(rhs)) => Float(lhs as f64 * rhs),
+            (Float(lhs), Int(rhs)) => Float(lhs * rhs as f64),
+            _ => panic!("Multiply non-numeric or not same type"),
+        }
+    }
+}
+
+impl ops::Div for LiteralExpr {
+    type Output = Self;
+    fn div(self, rhs: Self) -> Self::Output {
+        use LiteralExpr::*;
+        match (self, rhs) {
+            (Int(lhs), Int(rhs)) => Int(lhs / rhs),
+            (Float(lhs), Float(rhs)) => Float(lhs / rhs),
+            (Int(lhs), Float(rhs)) => Float(lhs as f64 / rhs),
+            (Float(lhs), Int(rhs)) => Float(lhs / rhs as f64),
+            _ => panic!("Divide non-numeric or not same type"),
+        }
+    }
+}
+
+impl PartialOrd for LiteralExpr {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        use LiteralExpr::*;
+        match (self, other) {
+            (Int(lhs), Int(rhs)) => lhs.partial_cmp(rhs),
+            (Float(lhs), Float(rhs)) => lhs.partial_cmp(rhs),
+            (Bool(lhs), Bool(rhs)) => lhs.partial_cmp(rhs),
+            _ => None,
+        }
+    }
+}
+
 impl OpExpr {
     /// Whether this operator expression represent predicate
     // TODO: might be pred or something else in the future
@@ -723,6 +811,24 @@ impl OpExpr {
         match self {
             Eq(_, _) | Neq(_, _) | GT(_, _) | GTE(_, _) | LT(_, _) | LTE(_, _) => true,
             _ => false,
+        }
+    }
+}
+
+impl fmt::Display for OpExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use OpExpr::*;
+        match self {
+            Plus(_, _) => write!(f, "+"),
+            Minus(_, _) => write!(f, "-"),
+            Mult(_, _) => write!(f, "*"),
+            Div(_, _) => write!(f, "/"),
+            Eq(_, _) => write!(f, "="),
+            Neq(_, _) => write!(f, "!="),
+            GT(_, _) => write!(f, ">"),
+            GTE(_, _) => write!(f, ">="),
+            LT(_, _) => write!(f, "<"),
+            LTE(_, _) => write!(f, "<="),
         }
     }
 }

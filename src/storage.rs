@@ -51,7 +51,7 @@ impl Display for Type {
             Long => write!(f, "long"),
             Ulong => write!(f, "unsigned long"),
             String => write!(f, "string"),
-            Bool => write!(f, "bolean"),
+            Bool => write!(f, "boolean"),
             Float => write!(f, "float"),
         }
     }
@@ -135,6 +135,11 @@ impl Type {
             Type::Int | Type::Uint | Type::Long | Type::Ulong | Type::Float => true,
             Type::String | Type::Bool => false,
         }
+    }
+
+    /// Just want to make it readable
+    pub fn is_bool(&self) -> bool {
+        matches!(self, Type::Bool)
     }
 }
 

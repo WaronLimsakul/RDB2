@@ -45,6 +45,7 @@ pub fn get_input(line_reader: &mut DefaultEditor) -> Result<Cmd, ParseErr> {
             schema: _,
         } => Cmd::DDL { ast, raw },
         Stmt::Delete { table: _ } => Cmd::DDL { ast, raw },
+        Stmt::Describe { table: _ } => Cmd::DDL { ast, raw },
     };
 
     Ok(cmd)

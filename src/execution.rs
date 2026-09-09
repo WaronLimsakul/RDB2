@@ -20,6 +20,7 @@ pub enum ExecErr {
     IntConversion(TryFromIntError),   // Error converting int input value to target type
     UnmatchedNumValues(usize, usize), // Expect <first usize> values, user provides <second usize> values,
     NonNumericType(Type),             // Found `Type` in a place that should be for numeric type
+    NonBooleanType(Type),             // Found `Type` in a place that should be for boolean type
     InvalidType(Type, Type),          // Expect first `Type`, found the second `Type`
     InvalidPredicate,                 // Not `col <op> literal` or `literal <op> col`
 }
@@ -61,11 +62,9 @@ pub fn execute(cmd: Cmd, engine: &mut StorageEngine) -> Result<(), ExecErr> {
         }
         Cmd::DDL { ast, raw: _ } => {
             query::execute_ddl(ast, engine)?;
-            repl::output("Executed"); // TODO: print something more useful
         }
         Cmd::DML { ast, raw: _ } => {
             query::execute_dml(ast, engine)?;
-            repl::output("Executed"); // TODO: print something more useful
         }
     }
 
@@ -86,6 +85,7 @@ impl fmt::Display for ExecErr {
                 write!(f, "User provide {} values, expect {} values", got, expect)
             }
             NonNumericType(got) => write!(f, "Expect numeric type, found {}", got),
+            NonBooleanType(got) => write!(f, "Expect boolean type, found {}", got),
             InvalidType(expect, got) => write!(f, "Expect {} type, found {}", expect, got),
             InvalidPredicate => write!(
                 f,

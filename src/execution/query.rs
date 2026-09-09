@@ -12,7 +12,11 @@ use crate::{
         project::Project,
         scan::{Scan, ScanOption},
     },
-    interface::parser::{ColumnList, ExprNode, LiteralExpr, OpExpr, ParseTree, RowValueNode, Stmt},
+    interface::{
+        parser::{ColumnList, ExprNode, LiteralExpr, OpExpr, ParseTree, RowValueNode, Stmt},
+        printer::PrintableTable,
+        repl,
+    },
     storage::{
         ColData, KeyData, KeyType, RecData, RowData, Type, engine::StorageEngine,
         table::TableSchema,
@@ -116,11 +120,62 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
             engine
                 .new_table(table.name.as_str(), schema)
                 .map_err(|e| ExecErr::Storage(e))?;
+            repl::output("Done");
         }
         Stmt::Delete { table } => {
             engine
                 .delete_table(table.name.as_str())
                 .map_err(|e| ExecErr::Storage(e))?;
+            repl::output("Done");
+        }
+        Stmt::Describe { table } => {
+            let table_schema = engine
+                .get_schema(&table.name)
+                .map_err(|e| ExecErr::Storage(e))?;
+            let report_schema = Schema::from(vec![
+                Column {
+                    name: "Column".to_string(),
+                    col_type: Type::String,
+                },
+                Column {
+                    name: "Type".to_string(),
+                    col_type: Type::String,
+                },
+                Column {
+                    name: "Comment".to_string(),
+                    col_type: Type::String,
+                },
+            ]);
+
+            let mut report_rows: Vec<Row> = Vec::new();
+
+            let key = &table_schema.key;
+            let key_row = Row {
+                data: vec![
+                    ColData::String(key.0.clone()),
+                    ColData::String(format!("{}", key.1.clone())),
+                    ColData::String("Primary Key".to_string()),
+                ],
+            };
+            report_rows.push(key_row);
+
+            for col in &table_schema.vals {
+                let val_row = Row {
+                    data: vec![
+                        ColData::String(col.0.clone()),
+                        ColData::String(format!("{}", col.1.clone())),
+                        ColData::String("".to_string()),
+                    ],
+                };
+                report_rows.push(val_row);
+            }
+
+            let report = PrintableTable {
+                schema: &report_schema,
+                rows: report_rows,
+            };
+
+            repl::output_table(&report);
         }
         _ => unreachable!("DDL shouldn't be this"),
     }
@@ -146,6 +201,8 @@ pub fn execute_dml<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
             .insert_row(row_data)
             .map_err(|e| ExecErr::Storage(e))?;
     }
+
+    repl::output("Done");
     Ok(())
 }
 
@@ -183,6 +240,9 @@ fn assemble_row_data(val_node: RowValueNode, schema: &TableSchema) -> Result<Row
 fn expr_to_col_data(expr: ExprNode, target: Type) -> Result<ColData, ExecErr> {
     match expr {
         ExprNode::Op(op) => match op {
+            //
+            // Numeric types
+            //
             OpExpr::Plus(lhs, rhs) => {
                 if !target.is_numeric() {
                     return Err(ExecErr::NonNumericType(target));
@@ -215,14 +275,60 @@ fn expr_to_col_data(expr: ExprNode, target: Type) -> Result<ColData, ExecErr> {
                 let r_data = expr_to_col_data(*rhs, target)?;
                 Ok(l_data / r_data)
             }
-            // TODO: support pred in insert here
-            OpExpr::Eq(_, _)
-            | OpExpr::Neq(_, _)
-            | OpExpr::GT(_, _)
-            | OpExpr::GTE(_, _)
-            | OpExpr::LT(_, _)
-            | OpExpr::LTE(_, _) => {
-                unimplemented!("Have not implement other operators yet");
+
+            //
+            // Boolean type
+            //
+
+            // TODO NOW: target is boolean but provided lhs and rhs don't have to be
+            // need another recursive function that resolve type without target type
+            OpExpr::Eq(lhs, rhs) => {
+                if !target.is_bool() {
+                    return Err(ExecErr::NonBooleanType(target));
+                }
+                let l_data = expr_to_literal(&*lhs);
+                let r_data = expr_to_literal(&*rhs);
+                Ok(ColData::Bool(l_data == r_data))
+            }
+            OpExpr::Neq(lhs, rhs) => {
+                if !target.is_bool() {
+                    return Err(ExecErr::NonBooleanType(target));
+                }
+                let l_data = expr_to_literal(&*lhs);
+                let r_data = expr_to_literal(&*rhs);
+                Ok(ColData::Bool(l_data != r_data))
+            }
+            OpExpr::GT(lhs, rhs) => {
+                if !target.is_bool() {
+                    return Err(ExecErr::NonBooleanType(target));
+                }
+                let l_data = expr_to_literal(&*lhs);
+                let r_data = expr_to_literal(&*rhs);
+                Ok(ColData::Bool(l_data > r_data))
+            }
+            OpExpr::GTE(lhs, rhs) => {
+                if !target.is_bool() {
+                    return Err(ExecErr::NonBooleanType(target));
+                }
+                let l_data = expr_to_literal(&*lhs);
+                let r_data = expr_to_literal(&*rhs);
+                Ok(ColData::Bool(l_data >= r_data))
+            }
+            OpExpr::LT(lhs, rhs) => {
+                if !target.is_bool() {
+                    return Err(ExecErr::NonBooleanType(target));
+                }
+                let l_data = expr_to_literal(&*lhs);
+                let r_data = expr_to_literal(&*rhs);
+                Ok(ColData::Bool(l_data < r_data))
+            }
+            OpExpr::LTE(lhs, rhs) => {
+                if !target.is_bool() {
+                    return Err(ExecErr::NonBooleanType(target));
+                }
+                let l_data = expr_to_literal(&*lhs);
+                let r_data = expr_to_literal(&*rhs);
+                Ok(ColData::Bool(l_data <= r_data))
             }
         },
         ExprNode::Literal(lit) => literal_to_col_data(lit, target),
@@ -268,6 +374,38 @@ pub fn literal_to_col_data(literal: LiteralExpr, target: Type) -> Result<ColData
     };
 
     Ok(col_data)
+}
+
+// Evaluate an expression to literal expr
+// requires: All the leaves must be literal
+fn expr_to_literal(expr: &ExprNode) -> LiteralExpr {
+    match expr {
+        ExprNode::Literal(lit) => lit.clone(),
+        ExprNode::Column(_) => unimplemented!("Haven't implement column as value yet"),
+        ExprNode::Op(op) => match op {
+            OpExpr::Plus(lhs, rhs) => {
+                let llit = expr_to_literal(lhs);
+                let rlit = expr_to_literal(rhs);
+                llit + rlit
+            }
+            OpExpr::Minus(lhs, rhs) => {
+                let llit = expr_to_literal(lhs);
+                let rlit = expr_to_literal(rhs);
+                llit - rlit
+            }
+            OpExpr::Mult(lhs, rhs) => {
+                let llit = expr_to_literal(lhs);
+                let rlit = expr_to_literal(rhs);
+                llit * rlit
+            }
+            OpExpr::Div(lhs, rhs) => {
+                let llit = expr_to_literal(lhs);
+                let rlit = expr_to_literal(rhs);
+                llit / rlit
+            }
+            _ => unimplemented!("Have not implement numeric operator in literal evaluation yet"),
+        },
+    }
 }
 
 /// Helper for DQL. Parse PK related predicate.
