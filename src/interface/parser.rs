@@ -406,13 +406,15 @@ impl<'a> Parser<'a> {
     }
 
     // Grammar: value expression. Can be:
+    // Terminal:
     // - '(' Expr ')'
     // - Column expression
     // - Literal expression
+    // Non Terminal:
     // - <Expr> Operator <Expr>
     fn parse_expr(&mut self) -> Result<ExprNode, ParseErr> {
         let first_token = self.peek_token()?;
-        match first_token.token_type {
+        let first = match first_token.token_type {
             // '(' Expr ')'
             TokenType::Punc(Punc::LParen) => {
                 self.next_token()?; // Pop '('
@@ -421,66 +423,49 @@ impl<'a> Parser<'a> {
                 if rparen.token_type != TokenType::Punc(Punc::RParen) {
                     return Err(ParseErr::Expect(")", rparen.content));
                 }
-                Ok(res)
+                res
             }
             // Column expression
-            // TokenType::ID => Ok(ExprNode::Column(self.parse_column()?)),
-            // Literal expression (and might be chained with operator)
-            TokenType::ID | TokenType::Literal(_) | TokenType::Op(Op::Minus) => {
-                let lhs = if first_token.token_type == TokenType::ID {
-                    ExprNode::Column(self.parse_column()?)
-                } else {
-                    self.parse_literal_expr()?
-                };
-                let next_token = self.peek_token()?;
+            TokenType::ID => ExprNode::Column(self.parse_column()?),
+            // Literal expression
+            TokenType::Literal(_) | TokenType::Op(Op::Minus) => self.parse_literal_expr()?,
+            _ => return Err(ParseErr::Expect("Expression", self.next_token()?.content)),
+        };
+        let next_token = self.peek_token()?;
 
-                // && and || operator are not recursive for now
-                // TODO: process it like other operators
-                if matches!(
-                    next_token.token_type,
-                    TokenType::Op(Op::And) | TokenType::Op(Op::Or)
-                ) {
-                    return Ok(lhs);
-                }
+        // && and || operator are not recursive for now
+        if matches!(
+            next_token.token_type,
+            TokenType::Op(Op::And) | TokenType::Op(Op::Or)
+        ) {
+            return Ok(first);
+        }
 
-                // parse_expr won't parse the predicate level expression for now
-                // TODO: parse all predicate level expression
-                // if is_predable(&next_token) {
-                //     return Ok(lhs);
-                // }
-
-                // NOTE: for now, we only guarantee correctness if they use parentheses
-                match next_token.token_type {
-                    TokenType::Op(_) => {
-                        let op = self.next_token()?;
-                        let rhs = self.parse_expr()?;
-                        let op_expr = match op.token_type {
-                            TokenType::Op(Op::Plus) => OpExpr::Plus(Box::new(lhs), Box::new(rhs)),
-                            TokenType::Op(Op::Minus) => OpExpr::Minus(Box::new(lhs), Box::new(rhs)),
-                            TokenType::Op(Op::Star) => OpExpr::Mult(Box::new(lhs), Box::new(rhs)),
-                            TokenType::Op(Op::Div) => OpExpr::Div(Box::new(lhs), Box::new(rhs)),
-                            TokenType::Op(Op::Eq) => OpExpr::Eq(Box::new(lhs), Box::new(rhs)),
-                            TokenType::Op(Op::Neq) => OpExpr::Neq(Box::new(lhs), Box::new(rhs)),
-                            TokenType::Op(Op::GT) => OpExpr::GT(Box::new(lhs), Box::new(rhs)),
-                            TokenType::Op(Op::GTE) => OpExpr::GTE(Box::new(lhs), Box::new(rhs)),
-                            TokenType::Op(Op::LT) => OpExpr::LT(Box::new(lhs), Box::new(rhs)),
-                            TokenType::Op(Op::LTE) => OpExpr::LTE(Box::new(lhs), Box::new(rhs)),
-                            _ => {
-                                return Err(ParseErr::Expect("Operator", op.content));
-                            }
-                        };
-                        Ok(ExprNode::Op(op_expr))
+        match next_token.token_type {
+            // If next token is operator, we keep chaining it as ExprNode::Op.
+            // Therefore, to ensure correctness, user should use parentheses.
+            TokenType::Op(_) => {
+                let op = self.next_token()?;
+                let second = self.parse_expr()?;
+                let op_expr = match op.token_type {
+                    TokenType::Op(Op::Plus) => OpExpr::Plus(Box::new(first), Box::new(second)),
+                    TokenType::Op(Op::Minus) => OpExpr::Minus(Box::new(first), Box::new(second)),
+                    TokenType::Op(Op::Star) => OpExpr::Mult(Box::new(first), Box::new(second)),
+                    TokenType::Op(Op::Div) => OpExpr::Div(Box::new(first), Box::new(second)),
+                    TokenType::Op(Op::Eq) => OpExpr::Eq(Box::new(first), Box::new(second)),
+                    TokenType::Op(Op::Neq) => OpExpr::Neq(Box::new(first), Box::new(second)),
+                    TokenType::Op(Op::GT) => OpExpr::GT(Box::new(first), Box::new(second)),
+                    TokenType::Op(Op::GTE) => OpExpr::GTE(Box::new(first), Box::new(second)),
+                    TokenType::Op(Op::LT) => OpExpr::LT(Box::new(first), Box::new(second)),
+                    TokenType::Op(Op::LTE) => OpExpr::LTE(Box::new(first), Box::new(second)),
+                    _ => {
+                        return Err(ParseErr::Expect("Operator", op.content));
                     }
-                    _ => Ok(lhs),
-                }
+                };
+                Ok(ExprNode::Op(op_expr))
             }
-            _ => {
-                return Err(ParseErr::Expect(
-                    "Expression",
-                    self.next_token()? /*first_token*/
-                        .content,
-                ));
-            }
+            // Otherwise, it's terminal
+            _ => Ok(first),
         }
     }
 
