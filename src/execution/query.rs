@@ -131,7 +131,7 @@ pub fn execute_dql<'a>(
         let mut scans: Vec<Box<dyn Operator + 'a>> = Vec::with_capacity(tables.len());
         let scan_opt = ScanOption { key: None };
         let engine_tables = engine
-            .get_dijoint_tables(tables.iter().map(|node| &node.name).collect())
+            .get_disjoint_tables(tables.iter().map(|node| &node.name).collect())
             .map_err(|e| ExecErr::Storage(e))?;
 
         for table in engine_tables {
@@ -141,12 +141,27 @@ pub fn execute_dql<'a>(
         let mut scanner_iter = scans.into_iter().rev();
         let last = scanner_iter.next().unwrap();
         let second_last = scanner_iter.next().unwrap();
-        let mut product = Cartesian::new(second_last, last);
+        let mut product = Box::from(Cartesian::new(second_last, last));
         for scan in scanner_iter {
-            product = Cartesian::new(scan, Box::from(product));
+            product = Box::from(Cartesian::new(scan, product));
         }
 
-        Ok(Box::from(product))
+        // In case we have to filter
+        let filterable_scan: Box<dyn Operator + 'a> = if !conds.preds.is_empty() {
+            Box::from(Filter::new(product, conds)?)
+        } else {
+            product
+        };
+
+        // In case we have to project
+        let exec_tree: Box<dyn Operator + 'a> = match cols {
+            ColumnList::All => filterable_scan,
+            ColumnList::Listed(listed_cols) => {
+                Box::from(Project::new(listed_cols, filterable_scan)?)
+            }
+        };
+
+        Ok(exec_tree)
     }
 }
 
@@ -529,6 +544,11 @@ impl Schema {
         self.cols.len()
     }
 
+    /// Get cloned column by its index
+    pub fn col(&self, idx: usize) -> Column {
+        self.cols[idx].clone()
+    }
+
     /// Find the target column (index, type) by name
     pub fn find_column(&self, name: &str) -> Option<(usize, Type)> {
         for (idx, col) in self.cols.iter().enumerate() {
@@ -537,6 +557,22 @@ impl Schema {
             }
         }
         None
+    }
+
+    /// Find the target column (idex, type) by name, only return Ok() if the
+    /// target column is not duplicated in the same schema
+    pub fn find_column_distinct(&self, name: &str) -> Result<Option<(usize, Type)>, ExecErr> {
+        let mut res: Option<(usize, Type)> = None;
+        for (idx, col) in self.cols.iter().enumerate() {
+            if col.name == name {
+                if res.is_none() {
+                    res = Some((idx, col.col_type));
+                } else {
+                    return Err(ExecErr::AmbiguousCol(name.to_string()));
+                }
+            }
+        }
+        Ok(res)
     }
 
     /// Just iterator of column entry

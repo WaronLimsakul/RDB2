@@ -28,9 +28,10 @@ impl<'a> Project<'a> {
 
         let source_schema = source.schema();
         for target_col in projected {
-            let (idx, col) = get_col(source_schema, target_col.name.as_str())
+            let (idx, _) = source_schema
+                .find_column_distinct(target_col.name.as_str())?
                 .ok_or_else(|| ExecErr::InvalidColName(target_col.name))?;
-            schema.push(col);
+            schema.push(source_schema.col(idx));
             indices.push(idx);
         }
 

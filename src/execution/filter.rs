@@ -18,10 +18,26 @@ pub struct Filter<'a> {
     preds: Vec<Predicate>,
 }
 
+pub enum Predicate {
+    Leaf(LeafPred),
+    Join(JoinPred),
+}
+
+// Should interpret as: `<col1> <op> <col2>`
+pub struct JoinPred {
+    col1: String,
+    col2: String,
+    op: PredOp,
+
+    // idx to use to get col1 and col2 in schema
+    col1_idx: usize,
+    col2_idx: usize,
+}
+
 // Should interpret as: `<col> <op> <other>`
 // e.g. col = c1, op = GT, other = 2 => "c1 > 2"
 // requires: col and other should already have same type
-pub struct Predicate {
+pub struct LeafPred {
     col: String,    // One of them must be column, otherwise, what's the point?
     op: PredOp,     // We have our own pred enum
     other: ColData, // Literal for now
@@ -90,16 +106,33 @@ impl<'a> Filter<'a> {
     /// Check if row satisfies pred at idx `i` in Filter
     fn satisfy(&self, row: &Row, pred_idx: usize) -> bool {
         let pred = &self.preds[pred_idx];
-        let col_data = &row.data[pred.col_idx];
-        let other = &pred.other;
-        use PredOp::*;
-        match pred.op {
-            Eq => col_data == other,
-            Neq => col_data != other,
-            GT => col_data > other,
-            GTE => col_data >= other,
-            LT => col_data < other,
-            LTE => col_data <= other,
+        match pred {
+            Predicate::Leaf(leaf_pred) => {
+                let col_data = &row.data[leaf_pred.col_idx];
+                let other = &leaf_pred.other;
+                use PredOp::*;
+                match leaf_pred.op {
+                    Eq => col_data == other,
+                    Neq => col_data != other,
+                    GT => col_data > other,
+                    GTE => col_data >= other,
+                    LT => col_data < other,
+                    LTE => col_data <= other,
+                }
+            }
+            Predicate::Join(join_pred) => {
+                let col1_data = &row.data[join_pred.col1_idx];
+                let col2_data = &row.data[join_pred.col2_idx];
+                use PredOp::*;
+                match join_pred.op {
+                    Eq => col1_data == col2_data,
+                    Neq => col1_data != col2_data,
+                    GT => col1_data > col2_data,
+                    GTE => col1_data >= col2_data,
+                    LT => col1_data < col2_data,
+                    LTE => col1_data <= col2_data,
+                }
+            }
         }
     }
 }
@@ -123,25 +156,25 @@ fn expr_to_pred(expr: ExprNode, schema: &Schema) -> Result<Predicate, ExecErr> {
         | OpExpr::GTE(lhs, rhs)
         | OpExpr::LT(lhs, rhs)
         | OpExpr::LTE(lhs, rhs) => match (*lhs, *rhs) {
-            // LHS column, RHS literal expression
+            // LHS column, RHS literal expression = leaf pred
             (ExprNode::Column(col_node), ExprNode::Literal(lit_expr)) => {
                 let col = col_node.name;
                 let (col_idx, col_type) = schema
-                    .find_column(col.as_str())
+                    .find_column_distinct(col.as_str())?
                     .ok_or_else(|| ExecErr::InvalidColName(col.clone()))?;
                 let other = literal_to_col_data(lit_expr, col_type)?;
-                Ok(Predicate {
+                Ok(Predicate::Leaf(LeafPred {
                     col,
                     op,
                     other,
                     col_idx,
-                })
+                }))
             }
-            // LHS literal expression, RHS column
+            // LHS literal expression, RHS column = leaf pred
             (ExprNode::Literal(lit_expr), ExprNode::Column(col_node)) => {
                 let col = col_node.name;
                 let (col_idx, col_type) = schema
-                    .find_column(col.as_str())
+                    .find_column_distinct(col.as_str())?
                     .ok_or_else(|| ExecErr::InvalidColName(col.clone()))?;
                 let other = literal_to_col_data(lit_expr, col_type)?;
                 // Since column is on the right side, we have to reverse the operator
@@ -153,12 +186,34 @@ fn expr_to_pred(expr: ExprNode, schema: &Schema) -> Result<Predicate, ExecErr> {
                     PredOp::LT => PredOp::GT,
                     PredOp::LTE => PredOp::GTE,
                 };
-                Ok(Predicate {
+                Ok(Predicate::Leaf(LeafPred {
                     col,
                     op,
                     other,
                     col_idx,
-                })
+                }))
+            }
+            // LHS and RHS are columns = Join Predicate
+            (ExprNode::Column(col1_node), ExprNode::Column(col2_node)) => {
+                let col1 = col1_node.name;
+                let col2 = col2_node.name;
+                let (col1_idx, col1_type) = schema
+                    .find_column_distinct(col1.as_str())?
+                    .ok_or_else(|| ExecErr::InvalidColName(col1.clone()))?;
+                let (col2_idx, col2_type) = schema
+                    .find_column_distinct(col2.as_str())?
+                    .ok_or_else(|| ExecErr::InvalidColName(col2.clone()))?;
+                if col1_type != col2_type {
+                    return Err(ExecErr::InvalidJoinPredTypes(col1, col2));
+                }
+
+                Ok(Predicate::Join(JoinPred {
+                    col1,
+                    col2,
+                    op,
+                    col1_idx,
+                    col2_idx,
+                }))
             }
             _ => {
                 return Err(ExecErr::InvalidPredicate);

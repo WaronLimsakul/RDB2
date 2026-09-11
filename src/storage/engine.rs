@@ -161,13 +161,16 @@ impl StorageEngine {
 
     /// Get multiple different tables at the same time
     // requires: all the table should have different names
-    pub fn get_dijoint_tables(
+    pub fn get_disjoint_tables(
         &mut self,
         table_names: Vec<&String>,
     ) -> Result<Vec<&mut Table>, EngineErr> {
         let mut tables: Vec<Option<&mut Table>> = Vec::with_capacity(table_names.len());
-        for _ in 0..table_names.len() {
+        for table_name in &table_names {
             tables.push(None);
+            if !self.tables.contains_key(table_name.as_str()) {
+                self.open_table(table_name)?;
+            }
         }
 
         let iter = self.tables.iter_mut();

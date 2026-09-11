@@ -15,15 +15,17 @@ mod scan;
 
 #[derive(Debug)]
 pub enum ExecErr {
-    Storage(EngineErr),               // Something wrong happen in storage engine
-    InvalidColName(String),           // Invalid column name
-    InvalidVal(LiteralExpr, Type),    // Invalid provided `LiteralExpr`, expect `Type` type
-    IntConversion(TryFromIntError),   // Error converting int input value to target type
+    Storage(EngineErr),                   // Something wrong happen in storage engine
+    InvalidColName(String),               // Invalid column name
+    InvalidVal(LiteralExpr, Type),        // Invalid provided `LiteralExpr`, expect `Type` type
+    IntConversion(TryFromIntError),       // Error converting int input value to target type
     UnmatchedNumValues(usize, usize), // Expect <first usize> values, user provides <second usize> values,
     NonNumericType(Type),             // Found `Type` in a place that should be for numeric type
     NonBooleanType(Type),             // Found `Type` in a place that should be for boolean type
     InvalidType(Type, Type),          // Expect first `Type`, found the second `Type`
     InvalidPredicate,                 // Not `col <op> literal` or `literal <op> col`
+    AmbiguousCol(String),             // Specified column name is ambiguous (can mean many columns)
+    InvalidJoinPredTypes(String, String), // Type of `String` column is not the same as second `String` column
 }
 
 /// Execute non-metadata command
@@ -91,6 +93,12 @@ impl fmt::Display for ExecErr {
             InvalidPredicate => write!(
                 f,
                 "Invalid values in predicate, expect `column <op> literal` or `literal <op> column`"
+            ),
+            AmbiguousCol(col) => write!(f, "Column '{}' is ambiguous", col),
+            InvalidJoinPredTypes(col1, col2) => write!(
+                f,
+                "Cross-column predicates of {} and {} has incompatible types",
+                col1, col2
             ),
         }
     }
