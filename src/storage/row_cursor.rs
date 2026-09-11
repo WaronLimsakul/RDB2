@@ -27,6 +27,11 @@ impl<'a> RowCursor<'a> {
         self.cursor.set(page_id, cell_idx);
         self
     }
+
+    /// Rewind the cursor back to the start like it's newly created
+    pub fn rewind(&mut self) {
+        self.cursor.rewind()
+    }
 }
 
 impl Iterator for RowCursor<'_> {

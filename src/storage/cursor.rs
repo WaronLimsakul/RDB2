@@ -3,7 +3,7 @@
 //! Interface for traversing the b-tree (internal).
 //! Note that it gives you raw bytes. For iterating over RowData, see row_cursor
 
-use crate::storage::{KeyData, cell::CellValue, node::Page, pager::Pager};
+use crate::storage::{KeyData, node::Page, pager::Pager};
 
 pub struct Cursor<'a> {
     pager: &'a mut Pager,
@@ -11,6 +11,10 @@ pub struct Cursor<'a> {
     cell_idx: u16,          // current cell idx
     cur_page: Option<Page>, // own page (will return to pager after done using)
     init: bool,             // for the first next() called, have to find the leaf node
+
+    // Initialized fields, in case of rewind.
+    // Never touched after init.
+    init_page_id: u32,
 }
 
 impl<'a> Cursor<'a> {
@@ -21,6 +25,7 @@ impl<'a> Cursor<'a> {
             cell_idx: 0,
             cur_page: None,
             init: false,
+            init_page_id: root_id,
         }
     }
 
@@ -52,6 +57,20 @@ impl<'a> Cursor<'a> {
         } else {
             self.cur_page = Some(page);
         }
+    }
+
+    /// Rewind Cursor to the starting point
+    pub fn rewind(&mut self) {
+        // Return page to pager if exists
+        if self.cur_page.is_some() {
+            self.pager
+                .reg_page_with_id(self.cur_page.take().unwrap(), self.page_id);
+        }
+
+        // Reset fields back to when initialized
+        self.page_id = self.init_page_id;
+        self.cell_idx = 0;
+        self.init = false;
     }
 }
 

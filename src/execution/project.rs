@@ -61,6 +61,10 @@ impl<'a> Operator for Project<'a> {
     fn schema(&self) -> &Schema {
         &self.schema
     }
+
+    fn rewind(&mut self) {
+        self.source.rewind();
+    }
 }
 
 // Find index and type entry of schema from column

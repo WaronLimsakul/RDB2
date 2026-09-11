@@ -3,11 +3,12 @@
 //! Main function to execute query language
 //!
 
-use std::slice::Iter;
+use std::{array::IntoIter, slice::Iter};
 
 use crate::{
     execution::{
         ExecErr,
+        cartesian::Cartesian,
         filter::{Filter, PredOp},
         project::Project,
         scan::{Scan, ScanOption},
@@ -18,8 +19,9 @@ use crate::{
         repl,
     },
     storage::{
-        ColData, KeyData, KeyType, RecData, RowData, Type, engine::StorageEngine,
-        table::TableSchema,
+        ColData, KeyData, KeyType, RecData, RowData, Type,
+        engine::StorageEngine,
+        table::{Table, TableSchema},
     },
 };
 
@@ -46,6 +48,8 @@ pub trait Operator {
     fn next(&mut self) -> Result<Option<Row>, ExecErr>;
     // What is the schema of the output row
     fn schema(&self) -> &Schema;
+    // Rewind back to like it's newly created
+    fn rewind(&mut self);
 }
 
 /// Execute DQL: only `select` statement for now
@@ -56,61 +60,94 @@ pub fn execute_dql<'a>(
     debug_assert!(matches!(
         query.root,
         Stmt::Select {
-            table: _,
+            tables: _,
             columns: _,
             conds: _
         }
     ));
 
     // Extract table and columns out
-    let (table, cols, conds) = if let Stmt::Select {
-        table,
+    let (tables, cols, conds) = if let Stmt::Select {
+        tables,
         columns,
         conds,
     } = query.root
     {
-        (table, columns, conds)
+        (tables, columns, conds)
     } else {
         panic!("Should always be select statement");
     };
 
-    // In case we are filtering by primary key:
-    // can tell storage engine to go there directly
-    let (key_name, key_type) = &engine
-        .get_schema(&table.name)
-        .map_err(|e| ExecErr::Storage(e))?
-        .key;
-    let key_preds = find_key_preds(&conds.preds, key_name, key_type.clone())?;
+    if tables.len() == 1 {
+        let table = tables.into_iter().next().unwrap();
 
-    // TODO: support multiple key predicates
-    let scan_opt = ScanOption {
-        key: if !key_preds.is_empty() {
-            Some(key_preds[0].1)
+        // In case we are filtering by primary key:
+        // can tell storage engine to go there directly
+        let (key_name, key_type) = &engine
+            .get_schema(&table.name)
+            .map_err(|e| ExecErr::Storage(e))?
+            .key;
+        let key_preds = find_key_preds(&conds.preds, key_name, key_type.clone())?;
+
+        // TODO: support multiple key predicates
+        let scan_opt = ScanOption {
+            key: if !key_preds.is_empty() {
+                Some(key_preds[0].1)
+            } else {
+                None
+            },
+        };
+
+        // Build execution tree from here
+        // TODO: Might have to refactor it to somewhere else
+
+        // Always start with scan
+        let scan = Box::from(Scan::new(
+            engine
+                .get_table_mut(table.name.as_str())
+                .map_err(|e| ExecErr::Storage(e))?,
+            scan_opt,
+        )?);
+
+        // In case we have to filter
+        let filterable_scan: Box<dyn Operator + 'a> = if !conds.preds.is_empty() {
+            Box::from(Filter::new(scan, conds)?)
         } else {
-            None
-        },
-    };
+            scan
+        };
 
-    // Build execution tree from here
-    // TODO: Might have to refactor it to somewhere else
+        // In case we have to project
+        let exec_tree: Box<dyn Operator + 'a> = match cols {
+            ColumnList::All => filterable_scan,
+            ColumnList::Listed(listed_cols) => {
+                Box::from(Project::new(listed_cols, filterable_scan)?)
+            }
+        };
 
-    // Always start with scan
-    let scan = Box::from(Scan::new(&table.name, scan_opt, engine)?);
-
-    // In case we have to filter
-    let filterable_scan: Box<dyn Operator + 'a> = if !conds.preds.is_empty() {
-        Box::from(Filter::new(scan, conds)?)
+        Ok(exec_tree)
     } else {
-        scan
-    };
+        // TODO NOW: merge single and multi tables case
+        // Right now, we don't build the tree.
+        let mut scans: Vec<Box<dyn Operator + 'a>> = Vec::with_capacity(tables.len());
+        let scan_opt = ScanOption { key: None };
+        let engine_tables = engine
+            .get_dijoint_tables(tables.iter().map(|node| &node.name).collect())
+            .map_err(|e| ExecErr::Storage(e))?;
 
-    // In case we have to project
-    let exec_tree: Box<dyn Operator + 'a> = match cols {
-        ColumnList::All => filterable_scan,
-        ColumnList::Listed(listed_cols) => Box::from(Project::new(listed_cols, filterable_scan)?),
-    };
+        for table in engine_tables {
+            scans.push(Box::from(Scan::new(table, scan_opt.clone())?));
+        }
 
-    Ok(exec_tree)
+        let mut scanner_iter = scans.into_iter().rev();
+        let last = scanner_iter.next().unwrap();
+        let second_last = scanner_iter.next().unwrap();
+        let mut product = Cartesian::new(second_last, last);
+        for scan in scanner_iter {
+            product = Cartesian::new(scan, Box::from(product));
+        }
+
+        Ok(Box::from(product))
+    }
 }
 
 /// Execute DDL: `new table` or `delete table`
@@ -279,9 +316,6 @@ fn expr_to_col_data(expr: ExprNode, target: Type) -> Result<ColData, ExecErr> {
             //
             // Boolean type
             //
-
-            // TODO NOW: target is boolean but provided lhs and rhs don't have to be
-            // need another recursive function that resolve type without target type
             OpExpr::Eq(lhs, rhs) => {
                 if !target.is_bool() {
                     return Err(ExecErr::NonBooleanType(target));

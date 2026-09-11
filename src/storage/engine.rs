@@ -159,6 +159,33 @@ impl StorageEngine {
         Ok(self.tables.get_mut(table_name).unwrap())
     }
 
+    /// Get multiple different tables at the same time
+    // requires: all the table should have different names
+    pub fn get_dijoint_tables(
+        &mut self,
+        table_names: Vec<&String>,
+    ) -> Result<Vec<&mut Table>, EngineErr> {
+        let mut tables: Vec<Option<&mut Table>> = Vec::with_capacity(table_names.len());
+        for _ in 0..table_names.len() {
+            tables.push(None);
+        }
+
+        let iter = self.tables.iter_mut();
+        for (name, table) in iter {
+            if let Some(idx) = table_names.iter().position(|target| *target == name) {
+                tables[idx] = Some(table);
+            }
+        }
+
+        for (i, table) in tables.iter().enumerate() {
+            if table.is_none() {
+                return Err(EngineErr::TableNotFound(table_names[i].clone()));
+            }
+        }
+
+        Ok(tables.into_iter().map(|t| t.unwrap()).collect())
+    }
+
     /// Open table's corresponding file, read metadata and save to cache
     // requires: table must not be in cache before.
     fn open_table(&mut self, table_name: &str) -> Result<(), EngineErr> {

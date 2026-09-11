@@ -6,6 +6,7 @@ use crate::{
     storage::{EngineErr, Type, engine::StorageEngine},
 };
 
+mod cartesian;
 mod filter;
 mod meta;
 mod project;

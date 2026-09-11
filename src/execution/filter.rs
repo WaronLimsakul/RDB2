@@ -60,6 +60,10 @@ impl<'a> Operator for Filter<'a> {
     fn schema(&self) -> &Schema {
         self.source.schema()
     }
+
+    fn rewind(&mut self) {
+        self.source.rewind();
+    }
 }
 
 impl<'a> Filter<'a> {

@@ -19,7 +19,7 @@ pub enum ParseErr {
 pub enum Stmt {
     // Query type: root
     Select {
-        table: TableNode,
+        tables: Vec<TableNode>,
         columns: ColumnList,
         conds: WhereNode,
     }, // table = Table, columns = Vec<Column>
@@ -160,8 +160,8 @@ impl<'a> Parser<'a> {
             return Err(ParseErr::Expect("'from' keyword", from_token.to_string()));
         }
 
-        // Parse table name
-        let table = self.parse_table()?;
+        // Parse tables
+        let tables = self.parse_table_list()?;
 
         // Parse where clause if exists
         let where_node = if self.peek_token()?.token_type == TokenType::KeyWord(KeyWord::Where) {
@@ -177,7 +177,7 @@ impl<'a> Parser<'a> {
         }
 
         let select = Stmt::Select {
-            table,
+            tables,
             columns: column_list,
             conds: where_node,
         };
@@ -336,6 +336,20 @@ impl<'a> Parser<'a> {
             name: col_name.content,
         };
         Ok(col_node)
+    }
+
+    // Grammar: `<table>, <table>, ...`
+    // (at least 1 table tho)
+    fn parse_table_list(&mut self) -> Result<Vec<TableNode>, ParseErr> {
+        let mut tables: Vec<TableNode> = Vec::new();
+        loop {
+            tables.push(self.parse_table()?);
+            if self.peek_token()?.token_type != TokenType::Punc(Punc::Comma) {
+                break;
+            }
+            self.next_token()?; // Pop the ','
+        }
+        Ok(tables)
     }
 
     // Grammar: just `<table_name>`

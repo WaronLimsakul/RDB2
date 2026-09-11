@@ -32,7 +32,7 @@ pub fn get_input(line_reader: &mut DefaultEditor) -> Result<Cmd, ParseErr> {
     let ast = parser.parse()?;
     let cmd = match &ast.root {
         Stmt::Select {
-            table: _,
+            tables: _,
             columns: _,
             conds: _,
         } => Cmd::DQL { ast, raw },
