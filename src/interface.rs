@@ -17,6 +17,7 @@ pub enum Cmd {
 pub enum MetaCmd {
     Quit,
     Tables, // List all tables in db
+    Help,   // Print help message
 }
 
 const LOGO: &str = r#"
@@ -30,4 +31,5 @@ const LOGO: &str = r#"
 /// Print a welcome message
 pub fn welcome() {
     repl::output(LOGO);
+    repl::output("For help, do `.help`")
 }

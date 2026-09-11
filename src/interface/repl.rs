@@ -21,6 +21,7 @@ pub fn get_input(line_reader: &mut DefaultEditor) -> Result<Cmd, ParseErr> {
             "exit" => MetaCmd::Quit,
             "tables" => MetaCmd::Tables,
             "ls" => MetaCmd::Tables,
+            "help" => MetaCmd::Help,
             _ => return Err(ParseErr::InvalidMeta(raw)),
         };
 
