@@ -78,7 +78,11 @@ pub fn execute_dql<'a>(
         panic!("Should always be select statement");
     };
 
-    if tables.len() == 1 {
+    // Build execution tree from here
+    // TODO: Might have to refactor it to somewhere else
+    let source: Box<dyn Operator + 'a> = if tables.len() == 1
+    // Only table, no product, just scan
+    {
         let table = tables.into_iter().next().unwrap();
 
         // In case we are filtering by primary key:
@@ -98,9 +102,6 @@ pub fn execute_dql<'a>(
             },
         };
 
-        // Build execution tree from here
-        // TODO: Might have to refactor it to somewhere else
-
         // Always start with scan
         let scan = Box::from(Scan::new(
             engine
@@ -109,25 +110,10 @@ pub fn execute_dql<'a>(
             scan_opt,
         )?);
 
-        // In case we have to filter
-        let filterable_scan: Box<dyn Operator + 'a> = if !conds.preds.is_empty() {
-            Box::from(Filter::new(scan, conds)?)
-        } else {
-            scan
-        };
-
-        // In case we have to project
-        let exec_tree: Box<dyn Operator + 'a> = match cols {
-            ColumnList::All => filterable_scan,
-            ColumnList::Listed(listed_cols) => {
-                Box::from(Project::new(listed_cols, filterable_scan)?)
-            }
-        };
-
-        Ok(exec_tree)
-    } else {
-        // TODO NOW: merge single and multi tables case
-        // Right now, we don't build the tree.
+        scan
+    } else
+    // Multiple table, need to do cartesiasn product
+    {
         let mut scans: Vec<Box<dyn Operator + 'a>> = Vec::with_capacity(tables.len());
         let scan_opt = ScanOption { key: None };
         let engine_tables = engine
@@ -146,23 +132,23 @@ pub fn execute_dql<'a>(
             product = Box::from(Cartesian::new(scan, product));
         }
 
-        // In case we have to filter
-        let filterable_scan: Box<dyn Operator + 'a> = if !conds.preds.is_empty() {
-            Box::from(Filter::new(product, conds)?)
-        } else {
-            product
-        };
+        product
+    };
 
-        // In case we have to project
-        let exec_tree: Box<dyn Operator + 'a> = match cols {
-            ColumnList::All => filterable_scan,
-            ColumnList::Listed(listed_cols) => {
-                Box::from(Project::new(listed_cols, filterable_scan)?)
-            }
-        };
+    // In case we have to filter
+    let filterable_source: Box<dyn Operator + 'a> = if !conds.preds.is_empty() {
+        Box::from(Filter::new(source, conds)?)
+    } else {
+        source
+    };
 
-        Ok(exec_tree)
-    }
+    // In case we have to project
+    let exec_tree: Box<dyn Operator + 'a> = match cols {
+        ColumnList::All => filterable_source,
+        ColumnList::Listed(listed_cols) => Box::from(Project::new(listed_cols, filterable_source)?),
+    };
+
+    Ok(exec_tree)
 }
 
 /// Execute DDL: `new table` or `delete table`
