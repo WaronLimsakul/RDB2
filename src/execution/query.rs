@@ -3,7 +3,7 @@
 //! Main function to execute query language
 //!
 
-use std::{array::IntoIter, slice::Iter};
+use std::slice::Iter;
 
 use crate::{
     execution::{
@@ -19,7 +19,7 @@ use crate::{
         repl,
     },
     storage::{
-        ColData, KeyData, KeyType, RecData, RowData, Type,
+        ColData, EngineErr, KeyData, KeyType, RecData, RowData, Type,
         engine::StorageEngine,
         table::{Table, TableSchema},
     },
@@ -160,7 +160,7 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
                 .map_err(|e| ExecErr::Storage(e))?;
             repl::output("Done");
         }
-        Stmt::Delete { table } => {
+        Stmt::Drop { table } => {
             engine
                 .delete_table(table.name.as_str())
                 .map_err(|e| ExecErr::Storage(e))?;
@@ -223,24 +223,67 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
 
 /// Execute DML: only `insert` statement for now
 pub fn execute_dml<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Result<(), ExecErr> {
-    let (table_node, values) = if let Stmt::Insert { table, values } = query.root {
-        (table, values)
-    } else {
-        panic!("Should be insert statement");
-    };
+    match query.root {
+        Stmt::Insert {
+            table: table_node,
+            values,
+        } => {
+            let table = engine
+                .get_table_mut(table_node.name.as_str())
+                .map_err(|e| ExecErr::Storage(e))?;
 
-    let table = engine
-        .get_table_mut(table_node.name.as_str())
-        .map_err(|e| ExecErr::Storage(e))?;
+            for val_node in values {
+                let row_data = assemble_row_data(val_node, table.schema())?;
+                table
+                    .insert_row(row_data)
+                    .map_err(|e| ExecErr::Storage(e))?;
+            }
+            repl::output("Done");
+        }
+        Stmt::Delete {
+            table: table_node,
+            conds,
+        } => {
+            // Get all the keys of the rows we want to delete first,
+            let table = engine
+                .get_table_mut(&table_node.name)
+                .map_err(|e| ExecErr::Storage(e))?;
+            let mut to_delete: Vec<KeyData> = Vec::new();
+            {
+                let scan_opt = ScanOption { key: None };
+                let scan: Box<dyn Operator> = Box::from(Scan::new(table, scan_opt)?);
+                let mut to_delete_op: Box<dyn Operator> = Box::from(Filter::new(scan, conds)?);
+                loop {
+                    match to_delete_op.next()? {
+                        Some(row) => {
+                            // NOTE: assume first column is always the key
+                            let key: KeyData = row.data[0]
+                                .clone()
+                                .try_into()
+                                .map_err(|e| ExecErr::Storage(e))?;
+                            to_delete.push(key);
+                        }
+                        None => break,
+                    }
+                }
+            }
 
-    for val_node in values {
-        let row_data = assemble_row_data(val_node, table.schema())?;
-        table
-            .insert_row(row_data)
-            .map_err(|e| ExecErr::Storage(e))?;
+            // Then delete_row_by_key one by one.
+            let mut success = 0;
+            for key in to_delete {
+                success += match table
+                    .delete_row_by_key(key)
+                    .map_err(|e| ExecErr::Storage(e))?
+                {
+                    true => 1,
+                    false => 0,
+                };
+            }
+            repl::output(format!("Deleted {} rows", success).as_str());
+        }
+        _ => unreachable!("Statement {:?} is not DML", query.root),
     }
 
-    repl::output("Done");
     Ok(())
 }
 

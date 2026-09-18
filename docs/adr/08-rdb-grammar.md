@@ -43,9 +43,11 @@ from <table_name>;
 
 
 ## Drop table
-I like `delete`.
+I like `delete`, but it will be confused with `delete` rows from table that I will
+implement in the future. So I'll do `drop`.
 ```
-delete table Foo;
+drop table Foo;
 ```
 That's it.
+
 

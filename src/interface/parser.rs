@@ -2,7 +2,7 @@ use std::{fmt, ops};
 
 use crate::{
     interface::lexer::{KeyWord, LexErr, Lexer, Literal, Op, Punc, Token, TokenType},
-    storage::{self, EngineErr, table::TableSchema},
+    storage::{self, table::TableSchema},
 };
 
 #[derive(Debug)]
@@ -16,6 +16,7 @@ pub enum ParseErr {
     InvalidMeta(String), // Meta command `String` not found
 }
 
+#[derive(Debug)]
 pub enum Stmt {
     // Query type: root
     Select {
@@ -32,6 +33,10 @@ pub enum Stmt {
         schema: TableSchema, // Will just use engine's schema right away
     },
     Delete {
+        table: TableNode,
+        conds: WhereNode,
+    },
+    Drop {
         table: TableNode,
     },
     Describe {
@@ -128,6 +133,7 @@ impl<'a> Parser<'a> {
             TokenType::KeyWord(KeyWord::Select) => self.parse_select_stmt()?,
             TokenType::KeyWord(KeyWord::Insert) => self.parse_insert_stmt()?,
             TokenType::KeyWord(KeyWord::New) => self.parse_new_stmt()?,
+            TokenType::KeyWord(KeyWord::Drop) => self.parse_drop_stmt()?,
             TokenType::KeyWord(KeyWord::Delete) => self.parse_delete_stmt()?,
             TokenType::KeyWord(KeyWord::Describe) => self.parse_describe_stmt()?,
             _ => {
@@ -252,14 +258,14 @@ impl<'a> Parser<'a> {
         Ok(stmt)
     }
 
-    // Grammar: `delete table <table>;`
-    fn parse_delete_stmt(&mut self) -> Result<Stmt, ParseErr> {
+    // Grammar: `drop table <table>;`
+    fn parse_drop_stmt(&mut self) -> Result<Stmt, ParseErr> {
         debug_assert_eq!(
             self.peek_token()?.token_type,
-            TokenType::KeyWord(KeyWord::Delete)
+            TokenType::KeyWord(KeyWord::Drop)
         );
 
-        self.next_token()?; // Pop 'delete'
+        self.next_token()?; // Pop 'drop'
         let table_keyword = self.next_token()?;
         if table_keyword.token_type != TokenType::KeyWord(KeyWord::Table) {
             return Err(ParseErr::Expect("table", table_keyword.content));
@@ -273,7 +279,7 @@ impl<'a> Parser<'a> {
             return Err(ParseErr::Expect(";", last_token.content));
         }
 
-        let stmt = Stmt::Delete { table };
+        let stmt = Stmt::Drop { table };
         Ok(stmt)
     }
 
@@ -295,6 +301,34 @@ impl<'a> Parser<'a> {
 
         let stmt = Stmt::Describe { table };
         Ok(stmt)
+    }
+
+    // Grammar: `delete from <table> where <pred>`
+    fn parse_delete_stmt(&mut self) -> Result<Stmt, ParseErr> {
+        debug_assert_eq!(
+            self.peek_token()?.token_type,
+            TokenType::KeyWord(KeyWord::Delete)
+        );
+
+        self.next_token()?; // pop "delete"
+        let from = self.next_token()?;
+        if from.token_type != TokenType::KeyWord(KeyWord::From) {
+            return Err(ParseErr::Expect("from", from.content));
+        }
+
+        let table = self.parse_table()?;
+        let where_node = self.parse_where_clause()?;
+
+        // Last token must be ';'
+        let last_token = self.next_token()?;
+        if last_token.token_type != TokenType::Punc(Punc::Semi) {
+            return Err(ParseErr::Expect(";", last_token.content));
+        }
+
+        Ok(Stmt::Delete {
+            table,
+            conds: where_node,
+        })
     }
 
     // Grammar:
