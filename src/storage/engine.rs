@@ -490,4 +490,377 @@ mod tests {
         assert_eq!(rows[1].vals.vals[1], ColData::Float(0.6));
         assert_eq!(rows[2].vals.vals[1], ColData::Float(0.4));
     }
+
+    // -----------------------------------------------------------------------
+    // Delete
+    // -----------------------------------------------------------------------
+
+    /// The engine has no DELETE statement yet, so go straight at the storage
+    /// layer. Returns whether the row existed.
+    fn delete(engine: &mut StorageEngine, table: &str, key: u32) -> bool {
+        engine
+            .get_table_mut(table)
+            .unwrap()
+            .delete_row_by_key(KeyData::Uint(key))
+            .expect("delete_row_by_key should not error")
+    }
+
+    /// Full table scan, returning only the keys, in cursor order.
+    fn scan_keys(engine: &mut StorageEngine, table: &str) -> Vec<u32> {
+        let rows: Vec<RowData> = engine
+            .get_all_rows(table)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        rows.iter()
+            .map(|row| match row.key {
+                KeyData::Uint(k) => k,
+                other => panic!("unexpected key type {other:?}"),
+            })
+            .collect()
+    }
+
+    /// A full scan has to agree with the expected key set — both the set of
+    /// keys and their order, so this catches a leaf chain that got truncated
+    /// (missing tail) as well as one that got stitched to the wrong node
+    /// (wrong order / duplicates).
+    fn assert_keys(engine: &mut StorageEngine, table: &str, expected: &[u32]) {
+        assert_eq!(
+            scan_keys(engine, table),
+            expected,
+            "table contents diverged from expectation"
+        );
+    }
+
+    /// Delete the middle of three rows; the neighbours survive intact.
+    #[test]
+    fn test_delete_basic() {
+        let dir = setup_test_dir("delete_basic");
+        let mut engine = StorageEngine::new(&dir).unwrap();
+        engine.new_table("test", make_schema()).unwrap();
+
+        engine.insert_row("test", make_row(1, "Alice", 30)).unwrap();
+        engine.insert_row("test", make_row(2, "Bob", 25)).unwrap();
+        engine
+            .insert_row("test", make_row(3, "Charlie", 35))
+            .unwrap();
+
+        assert!(delete(&mut engine, "test", 2));
+        assert_keys(&mut engine, "test", &[1, 3]);
+
+        // The surviving rows keep their payloads, not their neighbours'.
+        let rows: Vec<RowData> = engine
+            .get_all_rows("test")
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(rows[0].vals.vals[0], ColData::String("Alice".into()));
+        assert_eq!(rows[1].vals.vals[0], ColData::String("Charlie".into()));
+        assert_eq!(rows[1].vals.vals[1], ColData::Uint(35));
+    }
+
+    /// Deleting things that aren't there is a no-op, not an error and not a
+    /// corruption: empty table, key in a gap, key above the max, and the same
+    /// key twice.
+    #[test]
+    fn test_delete_missing_key() {
+        let dir = setup_test_dir("delete_missing_key");
+        let mut engine = StorageEngine::new(&dir).unwrap();
+        engine.new_table("test", make_schema()).unwrap();
+
+        // Empty table: no pages at all yet
+        assert!(!delete(&mut engine, "test", 1));
+
+        engine
+            .insert_row("test", make_row(10, "Alice", 30))
+            .unwrap();
+        engine.insert_row("test", make_row(30, "Bob", 25)).unwrap();
+
+        // Gap between two rows
+        assert!(!delete(&mut engine, "test", 20));
+        // Below the minimum
+        assert!(!delete(&mut engine, "test", 5));
+        // Above the maximum
+        assert!(!delete(&mut engine, "test", 99));
+        assert_keys(&mut engine, "test", &[10, 30]);
+
+        // Delete twice: first true, second false, contents unchanged
+        assert!(delete(&mut engine, "test", 10));
+        assert!(!delete(&mut engine, "test", 10));
+        assert_keys(&mut engine, "test", &[30]);
+    }
+
+    /// Delete the first and the last key of a multi-page tree, repeatedly,
+    /// so the leftmost-child sentinel and the "no next sibling" edge both get
+    /// exercised from both ends.
+    #[test]
+    fn test_delete_boundaries() {
+        let dir = setup_test_dir("delete_boundaries");
+        let mut engine = StorageEngine::new(&dir).unwrap();
+        engine.new_table("test", stress_schema()).unwrap();
+
+        let payload = "X".repeat(200);
+        let num_rows = 80u32;
+        for id in 1..=num_rows {
+            engine
+                .insert_row("test", make_stress_row(id, &payload))
+                .unwrap();
+        }
+
+        // Peel from the head, then from the tail
+        let mut expected: Vec<u32> = (1..=num_rows).collect();
+        for key in 1..=20 {
+            assert!(delete(&mut engine, "test", key));
+            expected.retain(|k| *k != key);
+            assert_keys(&mut engine, "test", &expected);
+        }
+        for key in (num_rows - 19..=num_rows).rev() {
+            assert!(delete(&mut engine, "test", key));
+            expected.retain(|k| *k != key);
+            assert_keys(&mut engine, "test", &expected);
+        }
+    }
+
+    /// Drain a multi-page tree to empty, checking the contents after every
+    /// single delete. This is the test that walks through merge, redistribute
+    /// and the final "leaf has no sibling" case in one pass.
+    #[test]
+    fn test_delete_all() {
+        let dir = setup_test_dir("delete_all");
+        let mut engine = StorageEngine::new(&dir).unwrap();
+        engine.new_table("test", stress_schema()).unwrap();
+
+        let payload = "X".repeat(200);
+        let num_rows = 60u32;
+        for id in 1..=num_rows {
+            engine
+                .insert_row("test", make_stress_row(id, &payload))
+                .unwrap();
+        }
+        assert_keys(&mut engine, "test", &(1..=num_rows).collect::<Vec<_>>());
+
+        let mut expected: Vec<u32> = (1..=num_rows).collect();
+        for key in 1..=num_rows {
+            assert!(delete(&mut engine, "test", key));
+            expected.retain(|k| *k != key);
+            assert_keys(&mut engine, "test", &expected);
+        }
+
+        // Empty table, and lookups on it stay harmless
+        assert!(
+            engine
+                .find_row_by_key("test", KeyData::Uint(1))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        assert!(!delete(&mut engine, "test", 1));
+    }
+
+    /// The main event: 80 rows across several leaves, deletes in an order that
+    /// keeps pushing leaves under the half-full threshold in different shapes.
+    ///
+    /// Phase 1 removes every other key, so each leaf loses cells while its
+    /// siblings are still full → redistribute. Phase 2 removes the survivors in
+    /// a scattered order, by which time siblings are sparse too → merge. The
+    /// full scan is re-checked after every single delete, so the first
+    /// divergence is the one that gets reported, not the fiftieth.
+    ///
+    /// Nothing is ever flushed, so the pager's debug asserts are live and any
+    /// page that gets taken and then dropped shows up as a `UnexpectedEof` or
+    /// an aliased page rather than being papered over by a disk read.
+    #[test]
+    fn test_delete_stress_no_flush() {
+        let dir = setup_test_dir("delete_stress_no_flush");
+        let mut engine = StorageEngine::new(&dir).unwrap();
+        engine.new_table("test", stress_schema()).unwrap();
+
+        let payload = "X".repeat(200);
+        let num_rows = 80u32;
+        for id in 1..=num_rows {
+            engine
+                .insert_row("test", make_stress_row(id, &payload))
+                .unwrap();
+        }
+
+        let mut expected: Vec<u32> = (1..=num_rows).collect();
+
+        // Phase 1: evens, ascending
+        for key in (2..=num_rows).step_by(2) {
+            assert!(delete(&mut engine, "test", key), "key {key} should exist");
+            expected.retain(|k| *k != key);
+            assert_keys(&mut engine, "test", &expected);
+        }
+
+        // Phase 2: the odd survivors, scattered (37 and 40 are coprime, so this
+        // visits every one of them exactly once)
+        for i in 0..expected.len() {
+            let key = expected[(i * 37) % expected.len()];
+            assert!(delete(&mut engine, "test", key), "key {key} should exist");
+            expected.retain(|k| *k != key);
+            assert_keys(&mut engine, "test", &expected);
+        }
+
+        assert!(expected.is_empty());
+    }
+
+    /// After deletes have rewritten separators and leaf chains, every surviving
+    /// key must still be reachable by a point lookup, and every deleted key must
+    /// route to the next key that is still there.
+    #[test]
+    fn test_delete_point_lookups() {
+        let dir = setup_test_dir("delete_point_lookups");
+        let mut engine = StorageEngine::new(&dir).unwrap();
+        engine.new_table("test", stress_schema()).unwrap();
+
+        let payload = "X".repeat(200);
+        let num_rows = 80u32;
+        for id in 1..=num_rows {
+            engine
+                .insert_row("test", make_stress_row(id, &payload))
+                .unwrap();
+        }
+
+        // Delete every third key
+        let deleted: Vec<u32> = (1..=num_rows).step_by(3).collect();
+        for key in &deleted {
+            assert!(delete(&mut engine, "test", *key));
+        }
+
+        let survivors: Vec<u32> = (1..=num_rows).filter(|k| k % 3 != 1).collect();
+        assert_keys(&mut engine, "test", &survivors);
+
+        // Exact lookups land on the key itself
+        for key in &survivors {
+            let row = engine
+                .find_row_by_key("test", KeyData::Uint(*key))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.key, KeyData::Uint(*key), "seek missed key {key}");
+        }
+
+        // Deleted keys land on the next surviving key up
+        for key in &deleted {
+            let next_up = survivors.iter().find(|k| **k > *key);
+            let row = engine
+                .find_row_by_key("test", KeyData::Uint(*key))
+                .unwrap()
+                .next();
+            match (row, next_up) {
+                (Some(row), Some(next_up)) => assert_eq!(
+                    row.unwrap().key,
+                    KeyData::Uint(*next_up),
+                    "deleted key {key} should route to {next_up}"
+                ),
+                (None, None) => {} // deleted key above the max: empty cursor
+                (row, next_up) => panic!("deleted key {key}: got {row:?}, expected {next_up:?}"),
+            }
+        }
+    }
+
+    /// A deletion is only real if it survives a round trip. Flush *before* the
+    /// deletes so that every page is on disk: if the rebalance logic drops a
+    /// page instead of registering it back, `flush()` silently skips it (it
+    /// walks the cache, and a taken page is not in the cache) and the reopen
+    /// reads the pre-delete bytes back.
+    #[test]
+    fn test_delete_flush_reopen() {
+        let dir = setup_test_dir("delete_flush_reopen");
+
+        let payload = "X".repeat(200);
+        let num_rows = 80u32;
+        let survivors: Vec<u32> = (1..=num_rows).filter(|k| k % 4 != 0).collect();
+
+        {
+            let mut engine = StorageEngine::new(&dir).unwrap();
+            engine.new_table("test", stress_schema()).unwrap();
+            for id in 1..=num_rows {
+                engine
+                    .insert_row("test", make_stress_row(id, &payload))
+                    .unwrap();
+            }
+            engine.flush_all().unwrap();
+
+            for key in (4..=num_rows).step_by(4) {
+                assert!(delete(&mut engine, "test", key));
+            }
+            assert_keys(&mut engine, "test", &survivors);
+
+            engine.flush_all().unwrap();
+        }
+
+        // Fresh engine, straight off disk
+        {
+            let mut engine = StorageEngine::new(&dir).unwrap();
+            assert_keys(&mut engine, "test", &survivors);
+
+            // And still usable: insert after the deletes, then remove it again
+            engine
+                .insert_row("test", make_stress_row(1000, &payload))
+                .unwrap();
+            let mut after_insert = survivors.clone();
+            after_insert.push(1000);
+            assert_keys(&mut engine, "test", &after_insert);
+
+            assert!(delete(&mut engine, "test", 1000));
+            assert_keys(&mut engine, "test", &survivors);
+        }
+    }
+
+    /// `rebalance_internals` only runs once the tree has a second level of
+    /// internal nodes, and an internal node goes under half-full below ~185
+    /// children (a 9-byte cell + 2-byte pointer against a 2036-byte threshold).
+    /// Getting there needs ~370 leaves, so this test is far too slow to run with
+    /// the rest of the suite — it is `#[ignore]`d. Run it with:
+    ///
+    /// ```text
+    /// cargo test -- --ignored --nocapture delete_rebalance_internals
+    /// ```
+    ///
+    /// The alternative is a test-tunable minimum-fill threshold (a `Table`
+    /// field instead of the `PAGE_FREE_SPACE / 2` constant), which would let
+    /// the same code be reached with a handful of rows.
+    // #[ignore = "needs ~2000 rows to build a second level of internal nodes"]
+    #[test]
+    fn test_delete_rebalance_internals() {
+        let dir = setup_test_dir("delete_rebalance_internals");
+        let mut engine = StorageEngine::new(&dir).unwrap();
+        engine.new_table("test", stress_schema()).unwrap();
+
+        // 500-byte payloads: 7 cells per leaf, so ~2000 rows is ~370 leaves —
+        // enough to split the root into two internal nodes.
+        let payload = "Y".repeat(500);
+        let num_rows = 2400u32;
+        for id in 1..=num_rows {
+            engine
+                .insert_row("test", make_stress_row(id, &payload))
+                .unwrap();
+        }
+        assert_eq!(scan_keys(&mut engine, "test").len(), num_rows as usize);
+
+        // Delete the low ~1200 keys, checking the scan only occasionally —
+        // a full scan per delete would dominate the runtime here.
+        for key in 1..=1200u32 {
+            assert!(delete(&mut engine, "test", key), "key {key} should exist");
+            if key % 200 == 0 {
+                let expected: Vec<u32> = (key + 1..=num_rows).collect();
+                assert_keys(&mut engine, "test", &expected);
+            }
+        }
+
+        assert_keys(&mut engine, "test", &(1201..=num_rows).collect::<Vec<_>>());
+
+        // The truncated tree must still be usable end to end
+        for key in [1201u32, 1800, num_rows] {
+            let row = engine
+                .find_row_by_key("test", KeyData::Uint(key))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.key, KeyData::Uint(key));
+        }
+    }
 }

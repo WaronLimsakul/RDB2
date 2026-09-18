@@ -35,13 +35,16 @@
 //! 1. Table::try_from_src
 //! 2. Table::write_header
 
-use std::io::{BufReader, Read, SeekFrom, Write};
+use std::{
+    io::{BufReader, Read, SeekFrom, Write},
+    ops,
+};
 
 use crate::storage::{
     EngineErr::{self, *},
-    KeyData, KeyType, MAX_RECORD_SIZE, PAGE_SIZE, RecData, RowData, TABLE_MAGIC_NUMBER, Type,
+    KeyData, KeyType, MAX_RECORD_SIZE, PAGE_FREE_SPACE, RecData, RowData, TABLE_MAGIC_NUMBER, Type,
     cell::CellValue,
-    node::Page,
+    node::{self, LEFTMOST_CHILD_CELL_IDX, Page},
     pager::{Pager, TableSrc},
     row_cursor::RowCursor,
 };
@@ -117,6 +120,49 @@ pub struct Table {
     schema: TableSchema,
     pager: Pager,
     root_id: u32, // ID of the root node
+}
+
+// Table traverse path
+struct Path {
+    path: Vec<PathEntry>,
+}
+
+// Wrapper methods for path
+impl Path {
+    pub fn new() -> Self {
+        Path { path: Vec::new() }
+    }
+    pub fn len(&self) -> usize {
+        self.path.len()
+    }
+    pub fn push(&mut self, entry: PathEntry) {
+        self.path.push(entry);
+    }
+    pub fn last(&self) -> Option<&PathEntry> {
+        self.path.last()
+    }
+    pub fn last_mut(&mut self) -> Option<&mut PathEntry> {
+        self.path.last_mut()
+    }
+    pub fn pop(&mut self) -> Option<PathEntry> {
+        self.path.pop()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.path.is_empty()
+    }
+}
+
+/// [] operator
+impl ops::Index<usize> for Path {
+    type Output = PathEntry;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.path[index]
+    }
+}
+
+struct PathEntry {
+    page: u32, // page id
+    idx: u16,  // Index we use to descend the page to its child
 }
 
 impl Table {
@@ -249,7 +295,7 @@ impl Table {
         // traverse the tree
         let key = data.key;
         let path = self.traverse_to_key(key)?;
-        let cur_page = self.pager.page_mut(*path.last().unwrap()).unwrap();
+        let cur_page = self.pager.page_mut(path.last().unwrap().page).unwrap();
 
         let res = cur_page.insert_cell(key, CellValue::Leaf(&data.vals.to_bytes()));
         match res {
@@ -277,7 +323,7 @@ impl Table {
 
         let path = self.traverse_to_key(key).unwrap();
         let (page_id, cell_idx) = {
-            let page = self.pager.page(*path.last().unwrap()).unwrap();
+            let page = self.pager.page(path.last().unwrap().page).unwrap();
             (page.id(), page.search_cell_leaf(key))
         };
         self.new_row_cursor().set(page_id, cell_idx)
@@ -309,20 +355,80 @@ impl Table {
         self.pager.flush()
     }
 
+    /// Delete the row with target key if exists, return whether the row exists
+    pub fn delete_row_by_key(&mut self, key: KeyData) -> Result<bool, EngineErr> {
+        if self.pager.num_pages() == 0 {
+            return Ok(false);
+        }
+
+        let path = self.traverse_to_key(key)?;
+        let page = self.pager.page_mut(path.last().unwrap().page).unwrap();
+        debug_assert!(page.is_leaf());
+        let idx = page.search_cell_leaf(key);
+        if idx >= page.num_cells() || page.cell(idx).key() != key {
+            return Ok(false);
+        }
+
+        page.delete_cell(idx);
+        // Rebalance (or merge) if space utilization < 50%
+        if page.used_space() < PAGE_FREE_SPACE as u16 / 2 {
+            self.rebalance_leaves(path, key)?;
+        }
+
+        Ok(true)
+    }
+
     /// Traverse from root to child that contain keydata, or where it should be if inserted.
     /// Return the traversal path if possible.
-    fn traverse_to_key(&mut self, key: KeyData) -> Result<Vec<u32>, EngineErr> {
+    /// NOTE: if page_num() = 0, will return PageNotExists
+    fn traverse_to_key(&mut self, key: KeyData) -> Result<Path, EngineErr> {
         // starts from root
         let root_id = self.root_id;
         let mut cur_page = self.pager.page(root_id).ok_or(PageNotExists(root_id))?;
-        let mut path = vec![root_id]; // traverse path
+        let mut path = Path::new();
 
         // traverse the tree
         while !cur_page.is_leaf() {
-            let child_id = cur_page.internal_get_child_id(key);
+            let (idx, child_id) = cur_page.internal_get_child_id(key);
+            path.push(PathEntry {
+                page: cur_page.id(),
+                idx,
+            }); // update the traverse path
             cur_page = self.pager.page(child_id).ok_or(PageNotExists(child_id))?; // go to child node
-            path.push(child_id); // update traverse path
         }
+
+        // Last entry on the path = leaf
+        path.push(PathEntry {
+            page: cur_page.id(),
+            idx: 0, // default value
+        });
+
+        Ok(path)
+    }
+
+    /// Like traverse_to_key but limit the path depth to n. i.e. result.len() <= n.
+    fn traverse_to_key_level(&mut self, key: KeyData, n: usize) -> Result<Path, EngineErr> {
+        // starts from root
+        let root_id = self.root_id;
+        let mut cur_page = self.pager.page(root_id).ok_or(PageNotExists(root_id))?;
+        let mut path = Path::new();
+
+        // traverse the tree
+        while path.len() < n && !cur_page.is_leaf() {
+            let (idx, child_id) = cur_page.internal_get_child_id(key);
+            path.push(PathEntry {
+                page: cur_page.id(),
+                idx,
+            }); // update traverse path
+            cur_page = self.pager.page(child_id).ok_or(PageNotExists(child_id))?; // go to child node
+        }
+
+        // Last entry on the path might not be leaf,
+        // need to find the child idx.
+        path.push(PathEntry {
+            page: cur_page.id(),
+            idx: cur_page.search_cell_internal(key),
+        });
 
         Ok(path)
     }
@@ -335,8 +441,8 @@ impl Table {
     /// 1. Allocating new node
     /// 2. Transfer half elements of old node to it
     /// 3. Add first key and pointer (of new node) to parent
-    fn split_insert_leaf(&mut self, path: Vec<u32>, data: RowData) -> Result<(), EngineErr> {
-        let target_id = *path.last().unwrap();
+    fn split_insert_leaf(&mut self, path: Path, data: RowData) -> Result<(), EngineErr> {
+        let target_id = path.last().unwrap().page;
         debug_assert!(self.pager.page(target_id).unwrap().is_leaf());
         let (new_page_id, new_page_first_key) = self.split_page(target_id, true)?;
         let old_page_last_key = self
@@ -377,7 +483,7 @@ impl Table {
     /// 3. Move first key of the new node to parent instead.
     fn split_insert_internal(
         &mut self,
-        path: Vec<u32>,
+        path: Path,
         key: KeyData,
         val: CellValue, // Must be CellValue::Internal
     ) -> Result<(), EngineErr> {
@@ -385,7 +491,7 @@ impl Table {
             matches!(val, CellValue::Internal(_)),
             "split_insert_internal() called with Leaf CellValue"
         );
-        let target_id = *path.last().unwrap();
+        let target_id = path.last().unwrap().page;
         let (new_page_id, new_page_leftmost_key) = self.split_page(target_id, false)?;
         let new_page = self.pager.page_mut(new_page_id).unwrap();
 
@@ -472,7 +578,7 @@ impl Table {
     /// Create a new root if no parent found
     fn insert_to_parent(
         &mut self,
-        mut path: Vec<u32>,
+        mut path: Path,
         key: KeyData,
         val: CellValue,
     ) -> Result<(), EngineErr> {
@@ -481,7 +587,7 @@ impl Table {
             "insert_to_parent() called with empty path"
         );
 
-        let child_id = path.pop().unwrap();
+        let child_id = path.pop().unwrap().page;
 
         if path.is_empty() {
             debug_assert!(
@@ -499,7 +605,7 @@ impl Table {
             // insert
             root.insert_cell(key, val)
         } else {
-            let parent_id = *path.last().unwrap();
+            let parent_id = path.last().unwrap().page;
             let parent = self.pager.page_mut(parent_id).unwrap();
             let val_backup = val.clone();
             match parent.insert_cell(key, val) {
@@ -510,8 +616,366 @@ impl Table {
         }
     }
 
+    /// Rebalance (or merge) the leaf node at the end of the path with its next sibling
+    /// requires: path.last() must be a leaf and the used space is dropped below threshold
+    ///
+    /// Implementation:
+    /// - If no sibling, done (e.g. only 1 leaf node)
+    /// - If leaf + sibling's used space < treshold => merge
+    /// - Otherwise, rebalance
+    fn rebalance_leaves(&mut self, mut path: Path, key: KeyData) -> Result<(), EngineErr> {
+        debug_assert!(path.len() > 0);
+        let leaf_id = path.last().unwrap().page;
+
+        debug_assert!(self.pager.page(leaf_id).is_some());
+        // Taken page here: must be registered back
+        let mut leaf = self.pager.take_page(leaf_id).unwrap();
+        if leaf.next_node_id() == node::NULL_NODE_ID {
+            self.pager.reg_page_with_id(leaf, leaf_id);
+            return Ok(());
+        }
+
+        let sibling_id = leaf.next_node_id();
+        debug_assert!(self.pager.page(sibling_id).is_some());
+        // Taken page here: must be registered back
+        let sibling = self.pager.take_page(sibling_id).unwrap();
+
+        path.pop(); // Pop leaf
+        let PathEntry {
+            page: parent_id,
+            idx: leaf_idx,
+        } = *path.last().unwrap();
+        let parent_num_cells = self.pager.page(parent_id).unwrap().num_cells();
+        let same_parent = leaf_idx < parent_num_cells - 1 // Leaf can be somewhere that is not end
+            || leaf_idx == LEFTMOST_CHILD_CELL_IDX; // or the left most of its parent
+
+        // If used space below threshold: merge
+        if leaf.used_space() + sibling.used_space() < (PAGE_FREE_SPACE as u16 / 2) {
+            // Move all sibling's cells to target,
+            for i in 0..sibling.num_cells() {
+                let cell = sibling.cell(i);
+                leaf.insert_cell(cell.key(), cell.value())?;
+            }
+
+            // Remove internal node's cell for sibling.
+            // If leaf and sibling has same parent, use same path
+            // for deleting the sibling's pointer in parent
+            if same_parent {
+                let sibling_idx = match leaf_idx {
+                    LEFTMOST_CHILD_CELL_IDX => 0,
+                    other => other + 1,
+                }; // sibling cell idx must be the one next to leaf's
+                path.last_mut().unwrap().idx = sibling_idx;
+                self.delete_internal_cell(path)
+                    .expect("Merge leaves failted: page leak"); // NOTE: panic because page leak
+            } else {
+                // Otherwise, just traverse again, use the path length so we don't go
+                // to the sibling node, which is already taken
+
+                // FIXME: sibling can have no cell at all
+                if sibling.num_cells() == 0 {
+                    panic!("Rebalance leaves with sibling with no cells reached");
+                }
+
+                let mut sibling_path = self
+                    .traverse_to_key_level(sibling.cell(0).key(), path.len())
+                    .expect("Merge leaves failed: page leak");
+                // Sibling must be in the leftmost of its parent
+                sibling_path.last_mut().unwrap().idx = LEFTMOST_CHILD_CELL_IDX;
+                self.delete_internal_cell(sibling_path)
+                    .expect("Merge leaves failed: page leak");
+            }
+
+            // Set new node's sibling
+            leaf.set_next_node_id(sibling.next_node_id());
+
+            // Register leaf back
+            self.pager.reg_page_with_id(leaf, leaf_id);
+        } else if leaf.num_cells() < sibling.num_cells() {
+            // If sibling has more cells: rebalance: move sibling's cells to target until
+            // both num_cells are equal (simpler than free space, not sure if works)
+            debug_assert!(sibling.num_cells() > 0);
+            let total_num_cells = leaf.num_cells() + sibling.num_cells();
+            let leaf_target_num_cells = (total_num_cells + 1) / 2; // Round up
+            debug_assert!(leaf.num_cells() < leaf_target_num_cells);
+            let mut i = 0;
+            while leaf.num_cells() < leaf_target_num_cells {
+                let cell = sibling.cell(i);
+                leaf.insert_cell(cell.key(), cell.value())
+                    .expect("Rebalance leaves failed: page leak");
+                i += 1;
+            }
+
+            // New sibling = just only contains cells that haven't been move to target leaf
+            let mut new_sibling = Page::new(true, sibling_id, true, false);
+            new_sibling.set_next_node_id(sibling.next_node_id());
+
+            // Move the left cells in original sibling
+            while i < sibling.num_cells() {
+                let cell = sibling.cell(i);
+                new_sibling
+                    .insert_cell(cell.key(), cell.value())
+                    .expect("Rebalance leaves failed: page leak");
+                i += 1;
+            }
+
+            // If leaf and sibling has same parent, just modify sibling's pointer in parent
+            if same_parent {
+                let sibling_idx = match leaf_idx {
+                    LEFTMOST_CHILD_CELL_IDX => 0,
+                    other => other + 1,
+                }; // sibling cell idx must be the one next to leaf's
+                self.pager
+                    .page_mut(parent_id)
+                    .unwrap()
+                    .set_cell_key(sibling_idx, new_sibling.cell(0).key());
+            } else {
+                // Otherwise, just traverse again, use the path length so we don't go
+                // to the sibling node, which is already taken
+                let sibling_path = self
+                    .traverse_to_key_level(sibling.cell(0).key(), path.len())
+                    .expect("Rebalance leaves failed: page leak");
+                let PathEntry {
+                    page: sibling_parent_id,
+                    idx: sibling_idx,
+                } = *sibling_path.last().unwrap();
+                let sibling_parent = self.pager.page_mut(sibling_parent_id).unwrap();
+                sibling_parent.set_cell_key(sibling_idx, new_sibling.cell(0).key());
+            }
+
+            // Register newly balanced pages back
+            self.pager.reg_page_with_id(leaf, leaf_id);
+            self.pager.reg_page_with_id(new_sibling, sibling_id);
+        } else {
+            // If can't merge or rebalance, just give both pages back
+            self.pager.reg_page_with_id(leaf, leaf_id);
+            self.pager.reg_page_with_id(sibling, sibling_id);
+        }
+
+        Ok(())
+    }
+
+    /// Delete the cell of target index from internal node
+    /// requires: path.last() must be entry the target internal node
+    fn delete_internal_cell(&mut self, path: Path) -> Result<(), EngineErr> {
+        debug_assert!(path.len() > 0);
+        let PathEntry {
+            page: node_id,
+            idx: target_idx,
+        } = *path.last().unwrap();
+
+        debug_assert!(self.pager.page(node_id).is_some());
+
+        let num_cells = self.pager.page(node_id).unwrap().num_cells();
+        // If target is leftmost, we update the key in its parent if need to
+        if target_idx == LEFTMOST_CHILD_CELL_IDX && num_cells > 0 && path.len() > 1 {
+            let new_key = self.pager.page_mut(node_id).unwrap().cell(0).key();
+            let PathEntry {
+                page: parent_id,
+                idx: node_idx,
+            } = path[path.len() - 2];
+            self.pager
+                .page_mut(parent_id)
+                .unwrap()
+                .set_cell_key(node_idx, new_key);
+        }
+
+        let node = self.pager.page_mut(node_id).unwrap();
+        node.delete_cell(target_idx);
+        if node.used_space() < PAGE_FREE_SPACE as u16 / 2 {
+            self.rebalance_internals(path)?;
+        }
+
+        Ok(())
+    }
+
+    /// Rebalance internal nodes at path.last(), with key
+    /// being the key of newly deleted cell of that leaf from path.last()
+    ///
+    /// requires: path.last() must be internal node
+    fn rebalance_internals(&mut self, mut path: Path) -> Result<(), EngineErr> {
+        debug_assert!(path.len() > 0);
+        let node_id = path.last().unwrap().page;
+
+        debug_assert!(self.pager.page(node_id).is_some());
+        // Taken page here: must be registered back
+        let mut node = self.pager.take_page(node_id).unwrap();
+        // If no sibling, do nothing
+        if node.next_node_id() == node::NULL_NODE_ID {
+            self.pager.reg_page_with_id(node, node_id);
+            return Ok(());
+        }
+
+        let sibling_id = node.next_node_id();
+        debug_assert!(self.pager.page(sibling_id).is_some());
+        // Taken page here: must be registered back
+        let sibling = self.pager.take_page(sibling_id).unwrap();
+
+        path.pop(); // Pop leaf
+        let PathEntry {
+            page: parent_id,
+            idx: node_idx,
+        } = *path.last().unwrap();
+        let parent_num_cells = self.pager.page(parent_id).unwrap().num_cells();
+        let same_parent = node_idx < parent_num_cells - 1 // Target node can be somewhere that is not end
+            || node_idx == LEFTMOST_CHILD_CELL_IDX; // or the left most of its parent
+
+        // Merge
+        if node.used_space() + sibling.used_space() < PAGE_FREE_SPACE as u16 / 2 {
+            //
+            // Move all sibling's cells to target,
+            //
+
+            // Move lefmost child
+            node.insert_cell(
+                self.leftmost_key(sibling.leftmost_child())?,
+                CellValue::Internal(sibling.leftmost_child()),
+            )
+            .expect("Merge internals failed: page leak");
+
+            // Move all other cells
+            for i in 0..sibling.num_cells() {
+                let cell = sibling.cell(i);
+                node.insert_cell(cell.key(), cell.value())
+                    .expect("Merge internals failed: page leak");
+            }
+
+            // Set node's next node to be that of sibling
+            node.set_next_node_id(sibling.next_node_id());
+
+            //
+            // Remove sibling's parent's pointer.
+            //
+
+            // If same parent, use thes same path.
+            if same_parent {
+                let sibling_idx = match node_idx {
+                    LEFTMOST_CHILD_CELL_IDX => 0,
+                    other => other + 1,
+                }; // Sibling's index must be next to that of node.
+                path.last_mut().unwrap().idx = sibling_idx;
+                self.delete_internal_cell(path) // delete sibling's pointer in parent node
+                    .expect("Merge internals failed: page leak");
+            } else {
+                // Traverse to sibling's parent.
+                //
+                // can limit this path length with path.len(),
+                // now we're sure that sibling_path.last() is parent of sibling.
+
+                // FIXME: sibling can have no cell at all
+                if sibling.num_cells() == 0 {
+                    panic!("Rebalance internals with sibling with no cells reached");
+                }
+
+                let mut sibling_path = self
+                    .traverse_to_key_level(sibling.cell(0).key(), path.len())
+                    .expect("Merge internals failed: page leak");
+                // Sibling must be leftmost of its parent
+                sibling_path.last_mut().unwrap().idx = LEFTMOST_CHILD_CELL_IDX;
+                self.delete_internal_cell(sibling_path)
+                    .expect("Merge internals failed: page leak");
+            }
+
+            // Register node back
+            self.pager.reg_page_with_id(node, node_id);
+        } else if node.num_cells() < sibling.num_cells() {
+            // If sibling has moer cells, rebalance: move sibling's cells to target until
+            // both num_cells are equal (simpler than free space, not sure if works)
+            debug_assert!(sibling.num_cells() > 0);
+
+            // Calculate how many cells it want
+            let total_num_cells = node.num_cells() + sibling.num_cells() + 1 /* left most of sibling */;
+            let node_target_num_cells = total_num_cells / 2;
+            debug_assert!(node.num_cells() < node_target_num_cells,);
+
+            // Insert sibling's leftmost key
+            node.insert_cell(
+                self.leftmost_key(sibling.leftmost_child())?,
+                CellValue::Internal(sibling.leftmost_child()),
+            )
+            .expect("Rebalance internals failed: page leak");
+
+            // Other cells until balance
+            let mut i = 0;
+            while node.num_cells() < node_target_num_cells {
+                let cell = sibling.cell(i);
+                node.insert_cell(cell.key(), cell.value())
+                    .expect("Rebalance internals failed: page leak");
+                i += 1;
+            }
+
+            // New sibling = just only contains cells that haven't been move to target leaf
+            let mut new_sibling = Page::new(true, sibling_id, false, false);
+            new_sibling.set_next_node_id(sibling.next_node_id());
+
+            // First cell becomes left most, will remember the key for its parent
+            let new_sibling_leftmost_key = sibling.cell(i).key();
+            let new_sibling_leftmost_val = match sibling.cell(i).value() {
+                CellValue::Internal(v) => v,
+                _ => unreachable!("Shouldn't found non-internal here"),
+            };
+            new_sibling.set_leftmost_child(new_sibling_leftmost_val);
+            i += 1;
+
+            while i < sibling.num_cells() {
+                let cell = sibling.cell(i);
+                new_sibling
+                    .insert_cell(cell.key(), cell.value())
+                    .expect("Rebalance internals failed: page leak");
+                i += 1;
+            }
+
+            // Update the sibling's parent's cell key
+            if same_parent {
+                // If same parent, just update in the parent
+                let sibling_idx = match node_idx {
+                    LEFTMOST_CHILD_CELL_IDX => 0,
+                    other => other + 1,
+                };
+                self.pager
+                    .page_mut(parent_id)
+                    .unwrap()
+                    .set_cell_key(sibling_idx, new_sibling_leftmost_key);
+            } else {
+                // Otherwise, traverse again to get the parent
+                let sibling_path = self
+                    .traverse_to_key_level(sibling.cell(0).key(), path.len())
+                    .expect("Rebalance internals failed: page leak");
+                let PathEntry {
+                    page: sibling_parent_id,
+                    idx: sibling_idx,
+                } = *sibling_path.last().unwrap();
+                let sibling_parent = self.pager.page_mut(sibling_parent_id).unwrap();
+                sibling_parent.set_cell_key(sibling_idx, new_sibling_leftmost_key);
+            }
+
+            // Register newly balanced pages back
+            self.pager.reg_page_with_id(node, node_id);
+            self.pager.reg_page_with_id(new_sibling, sibling_id);
+        } else {
+            // If can't merge or rebalance, just give pages back
+            self.pager.reg_page_with_id(node, node_id);
+            self.pager.reg_page_with_id(sibling, sibling_id);
+        }
+
+        Ok(())
+    }
+
+    /// Get the left most key of subtree of the node with target id
+    fn leftmost_key(&mut self, id: u32) -> Result<KeyData, EngineErr> {
+        let mut page = self.pager.page(id).ok_or(EngineErr::PageNotExists(id))?;
+        while !page.is_leaf() {
+            let next_id = page.leftmost_child();
+            page = self
+                .pager
+                .page(next_id)
+                .ok_or(EngineErr::PageNotExists(next_id))?;
+        }
+        Ok(page.cell(0).key())
+    }
+
     /// Helper to create new row cursor start from first cell of the table
-    fn new_row_cursor(&mut self) -> RowCursor {
+    fn new_row_cursor(&mut self) -> RowCursor<'_> {
         RowCursor::new(&mut self.pager, self.root_id, &self.schema)
     }
 }

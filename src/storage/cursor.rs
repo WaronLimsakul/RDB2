@@ -33,7 +33,7 @@ impl<'a> Cursor<'a> {
     // requires: page must be leaf and 0 <= cell_idx <= num_cells()
     pub fn set(&mut self, page_id: u32, cell_idx: u16) {
         debug_assert!(self.pager.page(page_id).unwrap().is_leaf());
-        debug_assert!(0 <= cell_idx && cell_idx <= self.pager.page(page_id).unwrap().num_cells());
+        debug_assert!(cell_idx <= self.pager.page(page_id).unwrap().num_cells());
 
         self.page_id = page_id;
         self.cell_idx = cell_idx;
@@ -94,7 +94,14 @@ impl Iterator for Cursor<'_> {
 
         // Have no page = just got to this new page
         if self.cur_page.is_none() {
-            // take first page
+            // If the page has no cells, no point in taking it
+            if let Some(page) = self.pager.page(self.page_id)
+                && page.num_cells() == 0
+            {
+                return None;
+            }
+
+            // take the page
             self.cur_page = self.pager.take_page(self.page_id);
             if self.cur_page.is_none() {
                 return None; // have no page, done

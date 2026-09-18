@@ -3,7 +3,7 @@
 //! Cache layer for disk's b-tree page
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{Read, Seek, SeekFrom, Write},
 };
 
@@ -25,8 +25,9 @@ impl<T: Read + Write + Seek> TableSrc for T {}
 pub struct Pager {
     cache: HashMap<u32, Page>,
     pub src: Box<dyn TableSrc>,
-    num_pages: u32,     // current number of pages in the file (not cache)
-    header_size: usize, // file's header size
+    taken: HashSet<u32>, // all the taken pages ID that is not registered back
+    num_pages: u32,      // current number of pages in the file (not cache)
+    header_size: usize,  // file's header size
 }
 
 impl Pager {
@@ -34,6 +35,7 @@ impl Pager {
     pub fn new(src: Box<dyn TableSrc>, num_pages: u32, header_size: usize) -> Pager {
         Pager {
             cache: HashMap::new(),
+            taken: HashSet::new(),
             src,
             num_pages,
             header_size,
@@ -46,6 +48,8 @@ impl Pager {
 
     /// Get immutable page with target page id
     pub fn page(&mut self, id: u32) -> Option<&Page> {
+        debug_assert!(!self.taken.contains(&id), "Page id {id} is taken.");
+
         // cache miss
         if !self.cache.contains_key(&id) {
             // Page doesn't exists
@@ -69,6 +73,8 @@ impl Pager {
 
     /// Get mutable page with target page id
     pub fn page_mut(&mut self, id: u32) -> Option<&mut Page> {
+        debug_assert!(!self.taken.contains(&id), "Page id {id} is taken.");
+
         // cache miss
         if !self.cache.contains_key(&id) {
             // Page doesn't exists
@@ -184,11 +190,26 @@ impl Pager {
 
         // add to cache
         self.cache.insert(id, page);
+        // remove from taken list if it's taken
+        self.taken.remove(&id);
     }
 
     /// Take ownership of the page with target id
-    /// Requires: the caller must register it back using reg_page_with_id(id)
+    /// NOTE: to return it back, use reg_page_with_id()
     pub fn take_page(&mut self, id: u32) -> Option<Page> {
-        self.cache.remove(&id)
+        debug_assert!(!self.taken.contains(&id), "Page id {id} already taken.");
+
+        match self.cache.remove(&id) {
+            Some(page) => {
+                self.taken.insert(id);
+                Some(page)
+            }
+            None => None,
+        }
+    }
+
+    /// List all the taken but not returned page IDs
+    pub fn taken_pages(&self) -> Vec<u32> {
+        self.taken.iter().map(|r| *r).collect()
     }
 }

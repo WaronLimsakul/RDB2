@@ -856,15 +856,15 @@ mod tests {
         assert!(matches!(
             stmt,
             Stmt::Select {
-                table: _,
+                tables: _,
                 columns: _,
                 conds: _,
             }
         ));
 
-        let expected_table = TableNode {
+        let expected_tables = vec![TableNode {
             name: "foo".to_string(),
-        };
+        }];
         let expected_columns = ColumnList::Listed(vec![
             ColumnNode {
                 name: "c1".to_string(),
@@ -877,12 +877,12 @@ mod tests {
             },
         ]);
         if let Stmt::Select {
-            table,
+            tables,
             columns,
             conds: _,
         } = stmt
         {
-            assert_eq!(table, expected_table);
+            assert_eq!(tables, expected_tables);
             assert_eq!(columns, expected_columns);
         }
     }
@@ -894,7 +894,7 @@ mod tests {
         assert!(matches!(
             stmt,
             Stmt::Select {
-                table: _,
+                tables: _,
                 columns: _,
                 conds: _
             }
@@ -908,7 +908,7 @@ mod tests {
         };
 
         if let Stmt::Select {
-            table: _,
+            tables: _,
             columns: _,
             conds,
         } = stmt

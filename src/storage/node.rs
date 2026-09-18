@@ -27,13 +27,14 @@
 //!
 
 use crate::storage::{
-    EngineErr, FOUR_BYTES_ZERO, KeyData, PAGE_HEADER_SIZE, PAGE_MAGIC_NUMBER, PAGE_SIZE,
+    EngineErr, FOUR_BYTES_ZERO, KeyData, PAGE_FREE_SPACE, PAGE_HEADER_SIZE, PAGE_MAGIC_NUMBER,
+    PAGE_SIZE,
     cell::{Cell, CellValue},
 };
 
-const NULL_NODE_ID: u32 = u32::MAX; // to annotate there is NO node
+pub const NULL_NODE_ID: u32 = u32::MAX; // to annotate there is NO node
 
-const LEFTMOST_CHILD_CELL_IDX: u16 = u16::MAX; // to represent the left most val of internal node
+pub const LEFTMOST_CHILD_CELL_IDX: u16 = u16::MAX; // to represent the left most val of internal node
 
 /// 1 page = 1 b-tree node
 /// see format in [arch](../../docs/adr/06-root-id-and-page-count-in-file-header.md)
@@ -67,7 +68,7 @@ impl Page {
         page.set_is_leaf(is_leaf);
         page.set_is_root(is_root);
         page.set_space_ptr(PAGE_SIZE as u16);
-        page.set_total_free_space((PAGE_SIZE - PAGE_HEADER_SIZE) as u16);
+        page.set_total_free_space(PAGE_FREE_SPACE as u16);
         page
     }
 
@@ -111,6 +112,11 @@ impl Page {
     /// Writes src u32 to target pos and set page to be dirty
     fn write_u32(&mut self, src: u32, pos: usize) {
         self.buffer[pos..pos + 4].copy_from_slice(&src.to_be_bytes());
+        self.make_dirty();
+    }
+    /// Writes src u64 to target pos and set page to be dirty
+    fn write_u64(&mut self, src: u64, pos: usize) {
+        self.buffer[pos..pos + 8].copy_from_slice(&src.to_be_bytes());
         self.make_dirty();
     }
     /// Write cell (key + val + metadata) to target pos and set page to be dirty
@@ -218,7 +224,7 @@ impl Page {
     }
 
     /// Use cell() to return last cell if exists
-    pub fn last_cell(&self) -> Option<Cell> {
+    pub fn last_cell(&self) -> Option<Cell<'_>> {
         let num_cells = self.num_cells();
         if num_cells > 0 {
             Some(self.cell(self.num_cells() - 1))
@@ -233,7 +239,7 @@ impl Page {
     /// 1. the index must be valid (< num_cells)
     /// 2. cannot get cell of index LEFTMOST_CHILD_CELL_IDX since it is not
     /// a real cell. Use method .leftmost_child() to get its value instead.
-    pub fn cell(&self, index: u16) -> Cell {
+    pub fn cell(&self, index: u16) -> Cell<'_> {
         debug_assert!(
             index != LEFTMOST_CHILD_CELL_IDX,
             "cell() called with LEFTMOST_CHILD_CELL_IDX"
@@ -250,7 +256,7 @@ impl Page {
     /// Try to get cell from the pointer with pointer index.
     /// Pointer index := first cell in the page has index 0, then 1, so on ....
     /// Returns None if index not in the node.
-    pub fn try_cell(&self, index: u16) -> Option<Cell> {
+    pub fn try_cell(&self, index: u16) -> Option<Cell<'_>> {
         debug_assert!(
             index != LEFTMOST_CHILD_CELL_IDX,
             "try_cell() called with LEFTMOST_CHILD_CELL_IDX"
@@ -263,8 +269,67 @@ impl Page {
         Some(self.cell_no_check(index))
     }
 
+    /// Delete the cell with given index, return whether the cell exists and successfully deleted
+    /// NOTE: if call with index = LEFTMOST_CHILD_CELL_IDX, it will do the move and shift
+    /// but it's caller responsibility to deal with parent update.
+    pub fn delete_cell(&mut self, index: u16) -> bool {
+        // In case we delete leftmost child, move
+        // first cell to leftmost, and shift that first cell
+        if index == LEFTMOST_CHILD_CELL_IDX {
+            debug_assert!(!self.is_leaf());
+            if self.num_cells() == 0 {
+                return true;
+            }
+            let idx_0_ptr = match self.cell(0).value() {
+                CellValue::Leaf(_) => unreachable!("Shouldb't be a leaf"),
+                CellValue::Internal(ptr) => ptr,
+            };
+            self.set_leftmost_child(idx_0_ptr);
+            return self.delete_cell(0);
+        }
+
+        if index >= self.num_cells() {
+            // Index out of range
+            return false;
+        }
+
+        // NOTE: won't have to do anything with the real data, we can defragment later.
+        let cell_size = self.cell(index).size();
+        // If not most right, shift everything to the right of index
+        if index < self.num_cells() - 1 {
+            // 0 1 .. dst [start .. end] -shift-> 0 1 .. [start .. end]
+            let dst = Self::OFF_PTRS + (2 * index as usize);
+            let start_to_move = dst + 2;
+            let end_to_move = Self::OFF_PTRS + (2 * self.num_cells() as usize);
+            self.buffer.copy_within(start_to_move..end_to_move, dst);
+        }
+        self.set_num_cells(self.num_cells() - 1);
+        self.set_total_free_space(self.total_free_space() + 2 /*ptr size*/ + cell_size as u16);
+        true
+    }
+
+    /// Set cell's key
+    /// requires: you must know what you're doing
+    pub fn set_cell_key(&mut self, cell_idx: u16, key: KeyData) {
+        debug_assert!(cell_idx < self.num_cells());
+        let offset = self.cell_ptr(cell_idx) as usize;
+        debug_assert!(
+            self.read_u8(offset) /*key size*/ == if let KeyData::Uint(_) = key { 4 } else { 8 }
+        );
+
+        match key {
+            KeyData::Uint(k) => self.write_u32(k, offset + 5),
+            KeyData::Ulong(k) => self.write_u64(k, offset + 5),
+        }
+    }
+
+    /// Return used space PAGE_FREE_SPACE - total_free_space
+    pub fn used_space(&self) -> u16 {
+        PAGE_FREE_SPACE as u16 - self.total_free_space()
+    }
+
     /// Core logic for cell() with no safely check, so that cell() can have debug_assert
-    fn cell_no_check(&self, index: u16) -> Cell {
+    fn cell_no_check(&self, index: u16) -> Cell<'_> {
         let cell_offset = self.cell_ptr(index) as usize;
 
         if self.is_leaf() {
@@ -288,7 +353,7 @@ impl Page {
     /// Search a ptr index of cell that caller should traverse if ask for that ID
     /// Requires: must be call on internal node
     /// NOTE: if it's the left most node, returns LEFTMOST_CHILD_CELL_IDX
-    fn search_cell_internal(&self, key: KeyData) -> u16 {
+    pub fn search_cell_internal(&self, key: KeyData) -> u16 {
         debug_assert!(
             !self.is_leaf(),
             "search_cell_internal() called in leaf node"
@@ -336,7 +401,10 @@ impl Page {
     /// Returns id of the node that we suppose to traverse
     /// in order to find the provided key.
     /// requires: the node must be internal to be called
-    pub fn internal_get_child_id(&self, key: KeyData) -> u32 {
+    /// returns: a pair of
+    /// - index we got the child id from
+    /// - the child id
+    pub fn internal_get_child_id(&self, key: KeyData) -> (u16, u32) {
         // shouldn't be used with leaf node
         debug_assert!(!self.is_leaf(), "traverse() called with leaf node");
 
@@ -344,9 +412,9 @@ impl Page {
 
         // know from debug_assert that it should be Internal
         if ptr == LEFTMOST_CHILD_CELL_IDX {
-            self.leftmost_child()
+            (ptr, self.leftmost_child())
         } else if let CellValue::Internal(val) = self.cell(ptr).value() {
-            val
+            (ptr, val)
         } else {
             panic!("Shouldn't happen.");
         }
