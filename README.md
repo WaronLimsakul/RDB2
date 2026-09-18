@@ -5,7 +5,7 @@ A basic relational database implementation by Ron.
 ## Features
 
 - Disk-backed tables indexed by a primary-key B-tree
-- `new table`, `insert`, `select ... where`, `delete table`
+- `new table`, `insert`, `delete`, `select ... where`, `drop table`
 - Filtering with `=`, `!=`, `<`, `<=`, `>`, `>=`, combined with `&&`
 - REPL with line history, pretty-printed table output, and meta commands
 
@@ -55,10 +55,16 @@ select name, age from User where age > 25 && age <= 35;
 `*` selects every column. A `where` clause keeps rows where all predicates
 hold; a column or a literal may appear on either side of a comparison.
 
+### Delete rows from table
+
+```sql
+delete from User where age > 20;
+```
+
 ### Drop a table
 
 ```sql
-delete table User;
+drop table User;
 ```
 
 ## Next steps

@@ -35,11 +35,14 @@ Statements (end with a semicolon)
   select <cols> from <name>[, <name>...] [where <cond>];
       Query rows. <cols> is * or a comma-separated list of column names.
       Listing several tables forms their cartesian product.
+  
+  delete from <name> where <conds>;
+      Delete row(s) from the table using the conditions.
 
   describe <name>;  (desc works too)
       Show a table's schema.
 
-  delete table <name>;
+  drop table <name>;
       Drop a table and its data.
 
 Types        int, long, uint, ulong, float, bool, string

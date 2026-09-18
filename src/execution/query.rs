@@ -151,7 +151,7 @@ pub fn execute_dql<'a>(
     Ok(exec_tree)
 }
 
-/// Execute DDL: `new table` or `delete table`
+/// Execute DDL: `new table` or `drop table`
 pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Result<(), ExecErr> {
     match query.root {
         Stmt::New { table, schema } => {
@@ -221,7 +221,7 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
     Ok(())
 }
 
-/// Execute DML: only `insert` statement for now
+/// Execute DML: `insert` or `delete` for now
 pub fn execute_dml<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Result<(), ExecErr> {
     match query.root {
         Stmt::Insert {
