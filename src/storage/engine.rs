@@ -6,6 +6,7 @@ use std::{collections::HashMap, ffi::OsStr, fs, path::PathBuf};
 
 use crate::storage::{
     KeyData, RowData, TABLE_FILE_EXTENSION,
+    node::NULL_NODE_ID,
     row_cursor::RowCursor,
     table::{Table, TableSchema},
 };
@@ -50,7 +51,7 @@ impl StorageEngine {
         // assume no page and first root id is 0
         self.tables.insert(
             name.to_string(),
-            Table::new(schema, 0, header_size, Box::new(file), 0),
+            Table::new(schema, 0, header_size, Box::new(file), 0, NULL_NODE_ID),
         );
 
         Ok(()) // NOTE: don't have to insert any page, will do that when insert first row

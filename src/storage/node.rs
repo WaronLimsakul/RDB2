@@ -6,15 +6,15 @@
 //!
 //! | Offset | Size | Description |
 //! |--------|------|-------------|
-//! | 0      | 4    | Magic number `PAGE_MAGIC_NUMBER` = `[0x50,0x41,0x47,0x45]` |
+//! | 0      | 4    | Magic number `PAGE_MAGIC_NUMBER` if alive, `FREE_PAGE_MAGIC_NUMBER` if free. |
 //! | 4      | 4    | Node ID |
 //! | 8      | 1    | Flags: bit 7 = is_leaf, bit 8 = is_root |
 //! | 9      | 2    | Number of cells |
-//! | 11     | 2    | Free space pointer — offset of first free byte from the back |
+//! | 11     | 2    | Free space pointer: offset of first free byte from the back |
 //! | 13     | 4    | Next sibling node ID |
 //! | 17     | 4    | Leftmost child node ID (internal only; unused for leaf) |
 //! | 21     | 2    | Total free space (needed because deletion fragments space) |
-//! | 23     | 2n   | Cell pointer array — `n` entries of `u16` byte offsets |
+//! | 23     | 2n   | Cell pointer array: `n` entries of `u16` byte offsets |
 //!
 //! Front of free space = `23 + num_cells * 2`.
 //! Back of free space = `free_space_ptr`.
@@ -27,8 +27,8 @@
 //!
 
 use crate::storage::{
-    EngineErr, FOUR_BYTES_ZERO, KeyData, PAGE_FREE_SPACE, PAGE_HEADER_SIZE, PAGE_MAGIC_NUMBER,
-    PAGE_SIZE,
+    EngineErr, FOUR_BYTES_ZERO, FREE_PAGE_MAGIC_NUMBER, KeyData, PAGE_FREE_SPACE,
+    PAGE_MAGIC_NUMBER, PAGE_SIZE,
     cell::{Cell, CellValue},
 };
 
@@ -51,6 +51,8 @@ impl Page {
     const OFF_FLAGS: usize = 8;
     const OFF_NUM_CELLS: usize = 9;
     const OFF_FREE_SPACE: usize = 11;
+    // - Sibling node in the tree for live page
+    // - Next free page for free page
     const OFF_NEXT_NODE: usize = 13;
     const OFF_LEFTMOST_CHILD: usize = 17;
     const OFF_TOTAL_FREE_SPACE: usize = 21;
@@ -149,6 +151,18 @@ impl Page {
     pub fn is_page(&self) -> bool {
         PAGE_MAGIC_NUMBER == self.buffer[Self::OFF_MAGIC..Self::OFF_MAGIC + 4]
     }
+    /// Set/unset free page magic number
+    pub fn set_is_free_page(&mut self, is_free_page: bool) {
+        let data = match is_free_page {
+            true => FREE_PAGE_MAGIC_NUMBER,
+            false => FOUR_BYTES_ZERO,
+        };
+        self.write_u32(u32::from_be_bytes(data), Self::OFF_MAGIC);
+    }
+    /// check if the page is a free page using free page magic number
+    pub fn is_free_page(&self) -> bool {
+        FREE_PAGE_MAGIC_NUMBER == self.buffer[Self::OFF_MAGIC..Self::OFF_MAGIC + 4]
+    }
 
     pub fn id(&self) -> u32 {
         self.read_u32(Self::OFF_ID)
@@ -210,6 +224,14 @@ impl Page {
         self.read_u32(Self::OFF_NEXT_NODE)
     }
     pub fn set_next_node_id(&mut self, val: u32) {
+        self.write_u32(val, Self::OFF_NEXT_NODE);
+    }
+    pub fn next_free_node_id(&self) -> u32 {
+        debug_assert!(self.is_free_page());
+        self.read_u32(Self::OFF_NEXT_NODE)
+    }
+    pub fn set_next_free_node_id(&mut self, val: u32) {
+        debug_assert!(self.is_free_page());
         self.write_u32(val, Self::OFF_NEXT_NODE);
     }
 

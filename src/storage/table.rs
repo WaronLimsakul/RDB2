@@ -9,8 +9,9 @@
 //! | 0      | 8    | Magic number `TABLE_MAGIC_NUMBER` = `[0x01,0x23,0x45,0x67,0x89,0xab,0xcd,0xef]` |
 //! | 8      | 4    | Page count (`u32`) |
 //! | 12     | 4    | Root node ID (`u32`) |
-//! | 16     | 8    | Column count (`u64`; first column is always the key) |
-//! | 24     | var  | Column entries (see below) |
+//! | 16     | 4    | First free page ID (`u32`) |
+//! | 20     | 8    | Column count (`u64`; first column is always the key) |
+//! | 28     | var  | Column entries (see below) |
 //!
 //! **Column entry** (repeat `num_cols` times):
 //!
@@ -44,7 +45,7 @@ use crate::storage::{
     EngineErr::{self, *},
     KeyData, KeyType, MAX_RECORD_SIZE, PAGE_FREE_SPACE, RecData, RowData, TABLE_MAGIC_NUMBER, Type,
     cell::CellValue,
-    node::{self, LEFTMOST_CHILD_CELL_IDX, Page},
+    node::{self, LEFTMOST_CHILD_CELL_IDX, NULL_NODE_ID, Page},
     pager::{Pager, TableSrc},
     row_cursor::RowCursor,
 };
@@ -111,8 +112,9 @@ impl TableSchema {
 const OFF_TABLE_MAGIC_NUMBER: usize = 0;
 const OFF_TABLE_NUM_PAGES: usize = 8;
 const OFF_TABLE_ROOT_NODE_ID: usize = 12;
-const OFF_TABLE_NUM_COLUMNS: usize = 16;
-const OFF_TABLE_COLUMN_ENTRIES: usize = 24;
+const OFF_TABLE_FREE_PAGE: usize = 16;
+const OFF_TABLE_NUM_COLUMNS: usize = 20;
+const OFF_TABLE_COLUMN_ENTRIES: usize = 18;
 
 /// Represent a file or table
 /// change metadata: change new, try_from_src, read_header
@@ -173,11 +175,12 @@ impl Table {
         header_size: usize,
         table_src: Box<dyn TableSrc>,
         root_id: u32,
+        free_page: u32,
     ) -> Table {
         Table {
             schema,
             root_id,
-            pager: Pager::new(table_src, num_pages, header_size),
+            pager: Pager::new(table_src, num_pages, header_size, free_page),
         }
     }
 
@@ -209,6 +212,8 @@ impl Table {
         let num_pages = read_u32(&mut br)?;
         // read root id
         let root_id = read_u32(&mut br)?;
+        // read first free page id
+        let free_page_id = read_u32(&mut br)?;
 
         // read num columns
         let num_cols = read_u64(&mut br)?;
@@ -242,7 +247,7 @@ impl Table {
         Ok(Table {
             schema,
             root_id,
-            pager: Pager::new(Box::new(src), num_pages, header_size as usize),
+            pager: Pager::new(Box::new(src), num_pages, header_size as usize, free_page_id),
         })
     }
 
@@ -257,6 +262,9 @@ impl Table {
         // 1. first 0 = number of page in u32
         // 2. second 0 = initial root id in u32
         bytes.extend_from_slice(&0u64.to_be_bytes());
+
+        // write the first free page ID: none, so use null id
+        bytes.extend_from_slice(&NULL_NODE_ID.to_be_bytes());
 
         // how many columns
         bytes.extend_from_slice(&schema.num_cols().to_be_bytes());
@@ -331,8 +339,13 @@ impl Table {
 
     /// Flush all the change that happen to table to disk
     pub fn flush(&mut self) -> Result<(), EngineErr> {
+        // Flush all the pages first so the pager can
+        // take care of the free page list.
+        self.pager.flush()?;
+
         // TODO(minor): may consider having num_pages_changed and root_node_changed fields
         let num_pages = self.pager.num_pages();
+        let free_page_id = self.pager.free_page();
         let root_node_id = self.root_id;
         let table_src = &mut self.pager.src;
 
@@ -352,7 +365,11 @@ impl Table {
             .write(&root_node_id.to_be_bytes())
             .map_err(|e| FsErr(Box::new(e)))?;
 
-        self.pager.flush()
+        table_src
+            .write(&free_page_id.to_be_bytes())
+            .map_err(|e| FsErr(Box::new(e)))?;
+
+        Ok(())
     }
 
     /// Delete the row with target key if exists, return whether the row exists

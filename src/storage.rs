@@ -19,6 +19,7 @@ const TABLE_FILE_EXTENSION: &str = "rdb";
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_MAGIC_NUMBER: [u8; 4] = [0x50, 0x41, 0x47, 0x45]; // "PAGE"
+const FREE_PAGE_MAGIC_NUMBER: [u8; 4] = [0x46, 0x52, 0x45, 0x45]; // "FREE"
 const FOUR_BYTES_ZERO: [u8; 4] = [0u8; 4];
 const PAGE_HEADER_SIZE: usize = 23;
 const PAGE_FREE_SPACE: usize = PAGE_SIZE - PAGE_HEADER_SIZE;
