@@ -69,7 +69,7 @@ drop table User;
 
 ## Next steps
 
-- Joins (multi-table queries) and column-name qualification
-- Row-level `update` / `delete`, secondary indexes
+- Efficient join, Column-name qualification
+- Row-level `update`, secondary indexes
 - Transactions and a write-ahead log (data is currently flushed on clean exit)
 - Serve over a protocol instead of the REPL
