@@ -14,18 +14,19 @@ use crate::{
         scan::{Scan, ScanOption},
     },
     interface::{
-        parser::{ColumnList, ExprNode, LiteralExpr, OpExpr, ParseTree, RowValueNode, Stmt},
+        parser::{
+            ColumnList, ColumnNode, ExprNode, LiteralExpr, OpExpr, ParseTree, RowValueNode, Stmt,
+        },
         printer::PrintableTable,
         repl,
     },
     storage::{
-        ColData, EngineErr, KeyData, KeyType, RecData, RowData, Type,
-        engine::StorageEngine,
-        table::{Table, TableSchema},
+        ColData, KeyData, KeyType, RecData, RowData, Type, engine::StorageEngine,
+        table::TableSchema,
     },
 };
 
-// Something like storange's TableSchema, but we don't care
+// Something like storage's TableSchema, but we don't care
 // about PK anymore. It's just another column, so we flatten it.
 pub struct Schema {
     pub cols: Vec<Column>,
@@ -33,6 +34,12 @@ pub struct Schema {
 
 #[derive(Clone)]
 pub struct Column {
+    // In case the column is from a pure table
+    // requires: must be Some(_) when table_used is true
+    pub table: Option<String>,
+    // When user specify the table directly, we have to show it.
+    pub table_used: bool,
+
     pub name: String,
     pub col_type: Type,
 }
@@ -172,14 +179,20 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
                 .map_err(|e| ExecErr::Storage(e))?;
             let report_schema = Schema::from(vec![
                 Column {
+                    table: None,
+                    table_used: false,
                     name: "Column".to_string(),
                     col_type: Type::String,
                 },
                 Column {
+                    table: None,
+                    table_used: false,
                     name: "Type".to_string(),
                     col_type: Type::String,
                 },
                 Column {
+                    table: None,
+                    table_used: false,
                     name: "Comment".to_string(),
                     col_type: Type::String,
                 },
@@ -578,6 +591,11 @@ impl Schema {
         self.cols[idx].clone()
     }
 
+    /// Get last column &mut
+    pub fn last_mut(&mut self) -> Option<&mut Column> {
+        self.cols.last_mut()
+    }
+
     /// Find the target column (index, type) by name
     pub fn find_column(&self, name: &str) -> Option<(usize, Type)> {
         for (idx, col) in self.cols.iter().enumerate() {
@@ -588,16 +606,23 @@ impl Schema {
         None
     }
 
-    /// Find the target column (idex, type) by name, only return Ok() if the
-    /// target column is not duplicated in the same schema
-    pub fn find_column_distinct(&self, name: &str) -> Result<Option<(usize, Type)>, ExecErr> {
-        let mut res: Option<(usize, Type)> = None;
+    /// Find the target column (idex, type, table_used) by column node ([table.]column),
+    /// only return Ok() if the target column is not duplicated in the same schema
+    pub fn find_column_distinct(
+        &self,
+        cn: &ColumnNode,
+    ) -> Result<Option<(usize, Type, bool)>, ExecErr> {
+        let mut res: Option<(usize, Type, bool)> = None;
+        let table_used = cn.table.is_some(); // User specify table of the column
         for (idx, col) in self.cols.iter().enumerate() {
-            if col.name == name {
+            // User can provide cn.table to specify which table the column came from
+            let table_match = cn.table.is_none() || col.table.is_none() // If either is None, consider the tables are matched
+                || cn.table.as_ref().unwrap() == col.table.as_ref().unwrap(); // Otherwise, compare the table
+            if table_match && col.name == cn.name {
                 if res.is_none() {
-                    res = Some((idx, col.col_type));
+                    res = Some((idx, col.col_type, table_used));
                 } else {
-                    return Err(ExecErr::AmbiguousCol(name.to_string()));
+                    return Err(ExecErr::AmbiguousCol(cn.name.to_string()));
                 }
             }
         }

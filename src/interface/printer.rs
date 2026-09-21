@@ -30,9 +30,23 @@ impl<'a> fmt::Display for PrintableTable<'a> {
         writeln!(f, "+")?;
 
         // Column names:
-        for (i, Column { name, col_type: _ }) in self.schema.iter().enumerate() {
+        for (
+            i,
+            Column {
+                table,
+                table_used,
+                name,
+                col_type: _,
+            },
+        ) in self.schema.iter().enumerate()
+        {
             let len = col_lens[i];
-            write!(f, "|{:^len$}", name)?;
+            // If table used, have to print "table.col"
+            let col = match table_used {
+                true => &format!("{}.{}", table.as_ref().unwrap(), name),
+                false => name,
+            };
+            write!(f, "|{:^len$}", col)?;
         }
         writeln!(f, "|")?;
 
@@ -74,7 +88,12 @@ impl<'a> PrintableTable<'a> {
         // Always +2 because I want to give leading and trailing space.
         let mut col_lens = Vec::with_capacity(self.schema.num_cols());
         for col in &self.schema.cols {
-            col_lens.push(col.name.len() + 2); // Give left and right space for col name
+            let col_len = col.name.len()
+                + match col.table_used {
+                    true => col.table.as_ref().unwrap().len() + 1, // "have to print <table>.<column>",
+                    false => 0,
+                };
+            col_lens.push(col_len + 2); // Give left and right space for col name
         }
 
         // Compare to row's column length

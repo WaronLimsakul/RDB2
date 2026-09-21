@@ -57,6 +57,7 @@ pub enum ColumnList {
 
 #[derive(Debug, PartialEq)]
 pub struct ColumnNode {
+    pub table: Option<String>, // Can provide table for qualification
     pub name: String,
 }
 
@@ -355,21 +356,36 @@ impl<'a> Parser<'a> {
         Ok(ColumnList::Listed(column_list))
     }
 
-    // Grammar: just `<col_name>`
+    // Grammar: `<col_name>` or `<table_name>.<col_name>`
     // NOTE: might support alias later
     fn parse_column(&mut self) -> Result<ColumnNode, ParseErr> {
         // The column name should only be id right now
-        // TODO: support table.column when support join
 
-        let col_name = self.next_token()?;
-        if col_name.token_type != TokenType::ID {
-            return Err(ParseErr::Expect("Column name", col_name.content));
+        // Can be table or column name
+        let name = self.next_token()?;
+        if name.token_type != TokenType::ID {
+            return Err(ParseErr::Expect("Column or table name", name.content));
         }
 
-        let col_node = ColumnNode {
-            name: col_name.content,
-        };
-        Ok(col_node)
+        match self.peek_token()?.token_type {
+            // name is table name
+            TokenType::Punc(Punc::Dot) => {
+                self.next_token()?; // Pop '.'
+                let col_name = self.next_token()?;
+                if col_name.token_type != TokenType::ID {
+                    return Err(ParseErr::Expect("Column name", col_name.content));
+                }
+                Ok(ColumnNode {
+                    table: Some(name.content),
+                    name: col_name.content,
+                })
+            }
+            // name is column name
+            _ => Ok(ColumnNode {
+                table: None,
+                name: name.content,
+            }),
+        }
     }
 
     // Grammar: `<table>, <table>, ...`
@@ -901,12 +917,15 @@ mod tests {
         }];
         let expected_columns = ColumnList::Listed(vec![
             ColumnNode {
+                table: None,
                 name: "c1".to_string(),
             },
             ColumnNode {
+                table: None,
                 name: "c2".to_string(),
             },
             ColumnNode {
+                table: None,
                 name: "c3".to_string(),
             },
         ]);
@@ -1087,6 +1106,7 @@ mod tests {
     }
     fn expr_node_col(c: &'static str) -> ExprNode {
         ExprNode::Column(ColumnNode {
+            table: None,
             name: c.to_string(),
         })
     }

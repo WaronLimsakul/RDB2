@@ -11,7 +11,6 @@ use crate::{
     },
     storage::{
         KeyData, RowData,
-        engine::StorageEngine,
         row_cursor::RowCursor,
         table::{Table, TableSchema},
     },
@@ -31,12 +30,13 @@ pub struct ScanOption {
 
 impl<'a> Scan<'a> {
     pub fn new(table: &'a mut Table, option: ScanOption) -> Result<Self, ExecErr> {
+        let table_name = table.name().to_string();
         let source = if option.key.is_some() {
             table.find_row_by_key(option.key.unwrap())
         } else {
             table.get_all_rows()
         };
-        let schema = storage_to_exec_schema(source.schema());
+        let schema = storage_to_exec_schema(table_name.as_str(), source.schema());
         let res = Scan {
             source,
             schema,
@@ -76,17 +76,21 @@ impl<'a> Operator for Scan<'a> {
 }
 
 /// Map storage engine's TableSchema to execution engine's Schema
-fn storage_to_exec_schema(ts: &TableSchema) -> Schema {
+fn storage_to_exec_schema(table_name: &str, ts: &TableSchema) -> Schema {
     let mut schema = Schema::with_capacity(ts.num_cols());
 
     // TODO: check again if PK is always physically first in tuple
     schema.push(Column {
+        table: Some(table_name.to_string()),
+        table_used: false,
         name: ts.key.0.clone(),
         col_type: ts.key.1.into(),
     }); // push key
 
     for (name, col_type) in &ts.vals {
         schema.push(Column {
+            table: Some(table_name.to_string()),
+            table_used: false,
             name: name.clone(),
             col_type: col_type.clone(),
         });

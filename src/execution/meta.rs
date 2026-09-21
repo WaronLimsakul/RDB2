@@ -58,6 +58,8 @@ pub fn execute(cmd: MetaCmd, engine: &mut StorageEngine) -> Result<(), EngineErr
         }
         MetaCmd::Tables => {
             let schema = Schema::from(vec![Column {
+                table: None,
+                table_used: false,
                 name: "table".to_string(),
                 col_type: Type::String,
             }]);

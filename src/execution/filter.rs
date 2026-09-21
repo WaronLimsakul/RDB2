@@ -158,13 +158,13 @@ fn expr_to_pred(expr: ExprNode, schema: &Schema) -> Result<Predicate, ExecErr> {
         | OpExpr::LTE(lhs, rhs) => match (*lhs, *rhs) {
             // LHS column, RHS literal expression = leaf pred
             (ExprNode::Column(col_node), ExprNode::Literal(lit_expr)) => {
-                let col = col_node.name;
-                let (col_idx, col_type) = schema
-                    .find_column_distinct(col.as_str())?
-                    .ok_or_else(|| ExecErr::InvalidColName(col.clone()))?;
+                let col = col_node.name.as_str();
+                let (col_idx, col_type, _) = schema
+                    .find_column_distinct(&col_node)?
+                    .ok_or_else(|| ExecErr::InvalidColName(col.to_string()))?;
                 let other = literal_to_col_data(lit_expr, col_type)?;
                 Ok(Predicate::Leaf(LeafPred {
-                    col,
+                    col: col.to_string(),
                     op,
                     other,
                     col_idx,
@@ -172,10 +172,10 @@ fn expr_to_pred(expr: ExprNode, schema: &Schema) -> Result<Predicate, ExecErr> {
             }
             // LHS literal expression, RHS column = leaf pred
             (ExprNode::Literal(lit_expr), ExprNode::Column(col_node)) => {
-                let col = col_node.name;
-                let (col_idx, col_type) = schema
-                    .find_column_distinct(col.as_str())?
-                    .ok_or_else(|| ExecErr::InvalidColName(col.clone()))?;
+                let col = col_node.name.as_str();
+                let (col_idx, col_type, _) = schema
+                    .find_column_distinct(&col_node)?
+                    .ok_or_else(|| ExecErr::InvalidColName(col.to_string()))?;
                 let other = literal_to_col_data(lit_expr, col_type)?;
                 // Since column is on the right side, we have to reverse the operator
                 let op = match op {
@@ -187,7 +187,7 @@ fn expr_to_pred(expr: ExprNode, schema: &Schema) -> Result<Predicate, ExecErr> {
                     PredOp::LTE => PredOp::GTE,
                 };
                 Ok(Predicate::Leaf(LeafPred {
-                    col,
+                    col: col.to_string(),
                     op,
                     other,
                     col_idx,
@@ -195,21 +195,24 @@ fn expr_to_pred(expr: ExprNode, schema: &Schema) -> Result<Predicate, ExecErr> {
             }
             // LHS and RHS are columns = Join Predicate
             (ExprNode::Column(col1_node), ExprNode::Column(col2_node)) => {
-                let col1 = col1_node.name;
-                let col2 = col2_node.name;
-                let (col1_idx, col1_type) = schema
-                    .find_column_distinct(col1.as_str())?
-                    .ok_or_else(|| ExecErr::InvalidColName(col1.clone()))?;
-                let (col2_idx, col2_type) = schema
-                    .find_column_distinct(col2.as_str())?
-                    .ok_or_else(|| ExecErr::InvalidColName(col2.clone()))?;
+                let col1 = col1_node.name.as_str();
+                let col2 = col2_node.name.as_str();
+                let (col1_idx, col1_type, _) = schema
+                    .find_column_distinct(&col1_node)?
+                    .ok_or_else(|| ExecErr::InvalidColName(col1.to_string()))?;
+                let (col2_idx, col2_type, _) = schema
+                    .find_column_distinct(&col2_node)?
+                    .ok_or_else(|| ExecErr::InvalidColName(col2.to_string()))?;
                 if col1_type != col2_type {
-                    return Err(ExecErr::InvalidJoinPredTypes(col1, col2));
+                    return Err(ExecErr::InvalidJoinPredTypes(
+                        col1.to_string(),
+                        col2.to_string(),
+                    ));
                 }
 
                 Ok(Predicate::Join(JoinPred {
-                    col1,
-                    col2,
+                    col1: col1.to_string(),
+                    col2: col2.to_string(),
                     op,
                     col1_idx,
                     col2_idx,

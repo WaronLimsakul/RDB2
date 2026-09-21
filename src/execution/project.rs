@@ -18,7 +18,7 @@ pub struct Project<'a> {
 }
 
 impl<'a> Project<'a> {
-    /// Create new Proeject operator. Can fail because invalid column names.
+    /// Create new Project operator. Can fail because invalid column names.
     pub fn new(
         projected: Vec<ColumnNode>,
         source: Box<dyn Operator + 'a>,
@@ -28,10 +28,12 @@ impl<'a> Project<'a> {
 
         let source_schema = source.schema();
         for target_col in projected {
-            let (idx, _) = source_schema
-                .find_column_distinct(target_col.name.as_str())?
+            let (idx, _, table_used) = source_schema
+                .find_column_distinct(&target_col)?
                 .ok_or_else(|| ExecErr::InvalidColName(target_col.name))?;
-            schema.push(source_schema.col(idx));
+            let mut col = source_schema.col(idx);
+            col.table_used = table_used; // Set if table is used to specify column
+            schema.push(col);
             indices.push(idx);
         }
 

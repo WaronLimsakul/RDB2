@@ -51,7 +51,15 @@ impl StorageEngine {
         // assume no page and first root id is 0
         self.tables.insert(
             name.to_string(),
-            Table::new(schema, 0, header_size, Box::new(file), 0, NULL_NODE_ID),
+            Table::new(
+                name,
+                schema,
+                0,
+                header_size,
+                Box::new(file),
+                0,
+                NULL_NODE_ID,
+            ),
         );
 
         Ok(()) // NOTE: don't have to insert any page, will do that when insert first row
@@ -203,8 +211,10 @@ impl StorageEngine {
             .open(&path)
             .map_err(|_| TableNotFound(table_name.to_string()))?;
 
-        self.tables
-            .insert(String::from(table_name), Table::try_from_src(file)?);
+        self.tables.insert(
+            String::from(table_name),
+            Table::try_from_src(table_name, file)?,
+        );
 
         Ok(())
     }

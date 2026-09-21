@@ -119,6 +119,7 @@ const OFF_TABLE_COLUMN_ENTRIES: usize = 18;
 /// Represent a file or table
 /// change metadata: change new, try_from_src, read_header
 pub struct Table {
+    name: String,
     schema: TableSchema,
     pager: Pager,
     root_id: u32, // ID of the root node
@@ -170,6 +171,7 @@ struct PathEntry {
 impl Table {
     /// Create new table from user provided data
     pub fn new(
+        name: &str,
         schema: TableSchema,
         num_pages: u32,
         header_size: usize,
@@ -178,6 +180,7 @@ impl Table {
         free_page: u32,
     ) -> Table {
         Table {
+            name: name.to_string(),
             schema,
             root_id,
             pager: Pager::new(table_src, num_pages, header_size, free_page),
@@ -189,6 +192,11 @@ impl Table {
         &self.schema
     }
 
+    /// Return table's name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Create a table by reading metadata from the reader
     // It should
     // 1. Read and check the magic number
@@ -197,7 +205,7 @@ impl Table {
     // 4. Parse the table schema
     // 5. Get the header size from stream pos
     // 6. Return table
-    pub fn try_from_src<T: TableSrc + 'static>(reader: T) -> Result<Self, EngineErr> {
+    pub fn try_from_src<T: TableSrc + 'static>(name: &str, reader: T) -> Result<Self, EngineErr> {
         let mut br = BufReader::new(reader);
 
         // check magic number
@@ -245,6 +253,7 @@ impl Table {
 
         // let pager use underline reader instead
         Ok(Table {
+            name: name.to_string(),
             schema,
             root_id,
             pager: Pager::new(Box::new(src), num_pages, header_size as usize, free_page_id),
@@ -389,7 +398,7 @@ impl Table {
         page.delete_cell(idx);
         // Rebalance (or merge) if space utilization < 50%
         if page.used_space() < PAGE_FREE_SPACE as u16 / 2 {
-            self.rebalance_leaves(path, key)?;
+            self.rebalance_leaves(path)?;
         }
 
         Ok(true)
@@ -640,7 +649,7 @@ impl Table {
     /// - If no sibling, done (e.g. only 1 leaf node)
     /// - If leaf + sibling's used space < treshold => merge
     /// - Otherwise, rebalance
-    fn rebalance_leaves(&mut self, mut path: Path, key: KeyData) -> Result<(), EngineErr> {
+    fn rebalance_leaves(&mut self, mut path: Path) -> Result<(), EngineErr> {
         debug_assert!(path.len() > 0);
         let leaf_id = path.last().unwrap().page;
 
