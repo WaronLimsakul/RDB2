@@ -73,7 +73,7 @@ impl TSKeyOption {
     /// Parse from a byte
     pub fn from_byte(byte: u8) -> Self {
         Self {
-            is_auto: byte & 0b10000000 == 1,
+            is_auto: byte & 0b10000000 != 0,
         }
     }
 

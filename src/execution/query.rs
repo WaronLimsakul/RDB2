@@ -251,15 +251,19 @@ pub fn execute_dml<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
                 .get_table_mut(table_node.name.as_str())
                 .map_err(|e| ExecErr::Storage(e))?;
 
-            if table.schema().key.is_auto() {
-                for val_node in values {
+            for val_node in values {
+                // In case payload looks like it's only record (no key),
+                // then we assemble record and auto generate key.
+                if val_node.values.len() == table.schema().num_cols() - 1
+                    && table.schema().key.is_auto()
+                {
                     let rec_data = assemble_rec_data(val_node, table.schema())?;
                     table
                         .insert_row_auto(rec_data)
                         .map_err(|e| ExecErr::Storage(e))?;
                 }
-            } else {
-                for val_node in values {
+                // Otherwise, just assume it's row payload
+                else {
                     let row_data = assemble_row_data(val_node, table.schema())?;
                     table
                         .insert_row(row_data)
