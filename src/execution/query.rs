@@ -21,8 +21,9 @@ use crate::{
         repl,
     },
     storage::{
-        ColData, KeyData, KeyType, RecData, RowData, Type, engine::StorageEngine,
-        table::TableSchema,
+        ColData, KeyData, KeyType, RecData, RowData, Type,
+        engine::StorageEngine,
+        table::{TSKey, TableSchema},
     },
 };
 
@@ -94,7 +95,11 @@ pub fn execute_dql<'a>(
 
         // In case we are filtering by primary key:
         // can tell storage engine to go there directly
-        let (key_name, key_type) = &engine
+        let TSKey {
+            name: key_name,
+            key_type,
+            ..
+        } = &engine
             .get_schema(&table.name)
             .map_err(|e| ExecErr::Storage(e))?
             .key;
@@ -173,6 +178,7 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
                 .map_err(|e| ExecErr::Storage(e))?;
             repl::output("Done");
         }
+        // TODO NOW: describe AUTO pkey
         Stmt::Describe { table } => {
             let table_schema = engine
                 .get_schema(&table.name)
@@ -203,8 +209,8 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
             let key = &table_schema.key;
             let key_row = Row {
                 data: vec![
-                    ColData::String(key.0.clone()),
-                    ColData::String(format!("{}", key.1.clone())),
+                    ColData::String(key.name.clone()),
+                    ColData::String(format!("{}", key.key_type.clone())),
                     ColData::String("Primary Key".to_string()),
                 ],
             };
@@ -213,8 +219,8 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
             for col in &table_schema.vals {
                 let val_row = Row {
                     data: vec![
-                        ColData::String(col.0.clone()),
-                        ColData::String(format!("{}", col.1.clone())),
+                        ColData::String(col.name.clone()),
+                        ColData::String(format!("{}", col.col_type.clone())),
                         ColData::String("".to_string()),
                     ],
                 };
@@ -237,6 +243,7 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
 /// Execute DML: `insert` or `delete` for now
 pub fn execute_dml<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Result<(), ExecErr> {
     match query.root {
+        // TODO NOW: get max_key and insert max_key + 1
         Stmt::Insert {
             table: table_node,
             values,
@@ -314,13 +321,13 @@ fn assemble_row_data(val_node: RowValueNode, schema: &TableSchema) -> Result<Row
     }
 
     let mut values = val_node.values.into_iter();
-    let key_data = expr_to_col_data(values.next().unwrap(), schema.key.1.into())?;
+    let key_data = expr_to_col_data(values.next().unwrap(), schema.key.key_type.into())?;
 
     let mut rec_data = RecData {
         vals: Vec::with_capacity(schema.vals.len()),
     };
     for (i, expr_node) in values.enumerate() {
-        let col_data = expr_to_col_data(expr_node, schema.vals[i].1)?;
+        let col_data = expr_to_col_data(expr_node, schema.vals[i].col_type)?;
         rec_data.vals.push(col_data);
     }
 

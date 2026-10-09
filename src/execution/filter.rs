@@ -10,7 +10,7 @@ use crate::{
         query::{Operator, Row, Schema, literal_to_col_data},
     },
     interface::parser::{ExprNode, OpExpr, WhereNode},
-    storage::{ColData, Type},
+    storage::ColData,
 };
 
 pub struct Filter<'a> {

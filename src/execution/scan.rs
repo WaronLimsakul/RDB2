@@ -12,7 +12,7 @@ use crate::{
     storage::{
         KeyData, RowData,
         row_cursor::RowCursor,
-        table::{Table, TableSchema},
+        table::{TSCol, Table, TableSchema},
     },
 };
 
@@ -83,11 +83,11 @@ fn storage_to_exec_schema(table_name: &str, ts: &TableSchema) -> Schema {
     schema.push(Column {
         table: Some(table_name.to_string()),
         table_used: false,
-        name: ts.key.0.clone(),
-        col_type: ts.key.1.into(),
+        name: ts.key.name.clone(),
+        col_type: ts.key.key_type.into(),
     }); // push key
 
-    for (name, col_type) in &ts.vals {
+    for TSCol { name, col_type } in &ts.vals {
         schema.push(Column {
             table: Some(table_name.to_string()),
             table_used: false,

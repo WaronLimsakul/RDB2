@@ -19,7 +19,8 @@
 //! |--------|------|-------------|
 //! | 0      | 2    | Name length (`u16`) |
 //! | 2      | n    | Name (UTF-8, n = name length) |
-//! | 2+n    | 1    | Column type `u8`: 0=Int, 1=Uint, 2=Long, 3=Ulong, 4=String, 5=Bool |
+//! | 2+n    | 1    | Column type `u8`: 0=Int, 1=Uint, 2=Long, 3=Ulong, 4=String, 5=Bool, 6=Float |
+//! | 2+n+1  | 1    | Bit flag (1st = is_auto)
 //!
 //! ## Column value encoding (`ColData::to_bytes`)
 //!
@@ -50,30 +51,101 @@ use crate::storage::{
     row_cursor::RowCursor,
 };
 
+/// TableSchema Column Entry
+#[derive(Debug, PartialEq)]
+pub struct TSCol {
+    pub name: String,
+    pub col_type: Type,
+}
+
+/// Option for key type
+#[derive(Debug, PartialEq)]
+pub struct TSKeyOption {
+    is_auto: bool, // Can opt-in for auto incremented key
+}
+
+impl TSKeyOption {
+    /// Default TS Key default option
+    pub fn default() -> Self {
+        Self { is_auto: false }
+    }
+
+    /// Parse from a byte
+    pub fn from_byte(byte: u8) -> Self {
+        Self {
+            is_auto: byte & 0b10000000 == 1,
+        }
+    }
+
+    /// Encode to byte
+    pub fn to_byte(&self) -> u8 {
+        if self.is_auto { 0b10000000 } else { 0 }
+    }
+}
+
+/// TableSchema Key Column Entry
+#[derive(Debug, PartialEq)]
+pub struct TSKey {
+    pub name: String,
+    pub key_type: KeyType,
+    pub option: TSKeyOption,
+}
+
+impl TSCol {
+    pub fn new(name: String, col_type: Type) -> Self {
+        Self {
+            name: name.to_string(),
+            col_type,
+        }
+    }
+}
+
+impl TSKey {
+    /// New from all provided data
+    pub fn new(name: &str, key_type: KeyType, option: TSKeyOption) -> Self {
+        Self {
+            name: name.to_string(),
+            key_type,
+            option,
+        }
+    }
+
+    /// Set option
+    pub fn set_option(&mut self, option: TSKeyOption) {
+        self.option = option;
+    }
+
+    /// Set if key will be auto-incremented
+    pub fn set_is_auto(&mut self, val: bool) {
+        self.option.is_auto = val;
+    }
+}
+
 /// Represent user-defined row schema in order
 #[derive(Debug, PartialEq)]
 pub struct TableSchema {
-    pub key: (String, KeyType), // type for id
-    pub vals: Vec<(String, Type)>,
+    pub key: TSKey,
+    pub vals: Vec<TSCol>,
 }
 
 impl TableSchema {
     /// New empty table schema
     pub fn new() -> Self {
         TableSchema {
-            key: ("".to_string(), KeyType::Uint),
+            key: TSKey::new("", KeyType::Uint, TSKeyOption::default()),
             vals: Vec::new(),
         }
     }
 
     /// Set new key name and type
     pub fn set_key(&mut self, name: String, key_type: KeyType) {
-        self.key = (name, key_type);
+        self.key.name = name;
+        self.key.key_type = key_type;
     }
 
     /// Add value type
     pub fn add_val_type(&mut self, name: String, col_type: Type) {
-        self.vals.push((name, col_type));
+        self.vals.push(TSCol::new(name, col_type));
     }
 
     /// Decoder raw bytes to RecData using the schema
@@ -81,7 +153,7 @@ impl TableSchema {
         let mut vals = Vec::with_capacity(self.vals.len());
         let mut offset = 0;
 
-        for (_, col_type) in &self.vals {
+        for TSCol { name: _, col_type } in &self.vals {
             let (res, n_bytes_read) = col_type.decode(&bytes[offset..])?;
             vals.push(res);
             offset += n_bytes_read;
@@ -91,13 +163,13 @@ impl TableSchema {
 
     /// Get column type from column name
     pub fn get_type(&self, col: &str) -> Option<Type> {
-        if col == self.key.0 {
-            return Some(self.key.1.into());
+        if col == self.key.name {
+            return Some(self.key.key_type.into());
         }
 
-        for (c, t) in self.vals.iter() {
-            if c == col {
-                return Some(t.clone());
+        for TSCol { name, col_type } in self.vals.iter() {
+            if name == col {
+                return Some(col_type.clone());
             }
         }
         None
@@ -225,24 +297,32 @@ impl Table {
 
         // read num columns
         let num_cols = read_u64(&mut br)?;
-        let mut schema = TableSchema {
-            key: (String::new(), KeyType::Uint), // place holder
-            vals: Vec::with_capacity(num_cols),
-        };
+        let mut schema = TableSchema::new();
+        schema.vals.reserve(num_cols);
 
         for i in 0..num_cols {
             let col_name = read_string(&mut br)?;
 
+            // Read column type byte
             let mut col_type_byte = [0u8];
             br.read_exact(col_type_byte.as_mut_slice())
                 .map_err(|e| FsErr(Box::new(e)))?;
             let col_type = Type::from_byte(col_type_byte[0]).ok_or(InvalidTypeByte)?;
 
+            // Read column option byte
+            let mut col_option_byte = [0u8];
+            br.read_exact(col_option_byte.as_mut_slice())
+                .map_err(|e| FsErr(Box::new(e)))?;
+
             // first column is key
             if i == 0 {
-                schema.key = (col_name, KeyType::try_from(col_type)?);
+                schema.set_key(col_name, KeyType::try_from(col_type)?);
+                schema
+                    .key
+                    .set_option(TSKeyOption::from_byte(col_option_byte[0]));
             } else {
-                schema.vals.push((col_name, col_type));
+                schema.vals.push(TSCol::new(col_name, col_type));
+                // TODO(col_opt): set column option when have it
             }
         }
 
@@ -279,15 +359,17 @@ impl Table {
         bytes.extend_from_slice(&schema.num_cols().to_be_bytes());
 
         // key column data
-        bytes.extend_from_slice(&str_len(&schema.key.0)?);
-        bytes.extend_from_slice(schema.key.0.as_bytes());
-        bytes.push(Type::from(schema.key.1).to_byte());
+        bytes.extend_from_slice(&str_len(&schema.key.name)?);
+        bytes.extend_from_slice(schema.key.name.as_bytes());
+        bytes.push(Type::from(schema.key.key_type).to_byte());
+        bytes.push(schema.key.option.to_byte());
 
         // value column data
-        for (col_name, t) in schema.vals.iter() {
-            bytes.extend_from_slice(&str_len(col_name)?);
-            bytes.extend_from_slice(col_name.as_bytes());
-            bytes.push(t.to_byte());
+        for TSCol { name, col_type } in schema.vals.iter() {
+            bytes.extend_from_slice(&str_len(name)?);
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.push(col_type.to_byte());
+            bytes.push(0u8); // TODO(col_opt): set column option when have it
         }
 
         // write ts out

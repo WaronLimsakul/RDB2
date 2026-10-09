@@ -139,7 +139,7 @@ impl<'a> Parser<'a> {
             TokenType::KeyWord(KeyWord::Describe) => self.parse_describe_stmt()?,
             _ => {
                 return Err(ParseErr::Expect(
-                    "First token of type: select/insert/new",
+                    "First token of type: select/insert/new/drop/delete/describe",
                     first_token.to_string(),
                 ));
             }
@@ -233,7 +233,7 @@ impl<'a> Parser<'a> {
     }
 
     // Grammar:
-    // `new table <table> { <c1> : <t1> primary, <c2> : <t2>, ... }`
+    // `new table <table> { <c1> : <t1> primary [auto], <c2> : <t2>, ... }`
     fn parse_new_stmt(&mut self) -> Result<Stmt, ParseErr> {
         debug_assert_eq!(
             self.peek_token()?.token_type,
@@ -590,9 +590,11 @@ impl<'a> Parser<'a> {
         Ok(node)
     }
 
-    // Grammar: { <c1> : <t1> primary, <c2> : <t2>, ... }`
+    // Grammar: { <c1> : <t1> primary [auto], <c2> : <t2>, ... }`
     // - Allowed types: see parse_column_type()
     // - One of the column must be `primary` key and use `uint` or `ulong`
+    // - The column that is `primary` can use `auto`, which enable auto incremented
+    //   primary key value when insert.
     fn parse_table_schema(&mut self) -> Result<TableSchema, ParseErr> {
         // Must start with '{'
         let lbrace = self.next_token()?;
@@ -627,6 +629,12 @@ impl<'a> Parser<'a> {
 
                 self.next_token()?; // Pop "primary"
                 primary_set = true;
+
+                // Primary key can be auto-incremented
+                if self.peek_token()?.token_type == TokenType::KeyWord(KeyWord::Auto) {
+                    schema.key.set_is_auto(true);
+                    self.next_token()?; // Pop "auto"
+                }
             } else {
                 // Non-primary key type
                 schema.add_val_type(col.name, col_type);
@@ -896,6 +904,8 @@ fn is_predable(token: &Token) -> bool {
 }
 
 mod tests {
+    use crate::storage::table::{TSCol, TSKey, TSKeyOption};
+
     use super::*;
 
     #[test]
@@ -1046,11 +1056,11 @@ mod tests {
             name: "foo".to_string(),
         };
         let expected_schema = TableSchema {
-            key: ("id".to_string(), storage::KeyType::Ulong),
+            key: TSKey::new("id", storage::KeyType::Ulong, TSKeyOption::default()),
             vals: vec![
-                ("name".to_string(), storage::Type::String),
-                ("age".to_string(), storage::Type::Uint),
-                ("is_cool".to_string(), storage::Type::Bool),
+                TSCol::new("name".to_string(), storage::Type::String),
+                TSCol::new("age".to_string(), storage::Type::Uint),
+                TSCol::new("is_cool".to_string(), storage::Type::Bool),
             ],
         };
 

@@ -240,7 +240,10 @@ impl StorageEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{ColData, KeyType, RecData, Type};
+    use crate::storage::{
+        ColData, KeyType, RecData, Type,
+        table::{TSCol, TSKey, TSKeyOption},
+    };
 
     fn setup_test_dir(name: &str) -> String {
         let dir = format!("/tmp/rdb2_test_{}", name);
@@ -250,10 +253,10 @@ mod tests {
 
     fn make_schema() -> TableSchema {
         TableSchema {
-            key: ("id".to_string(), KeyType::Uint),
+            key: TSKey::new("id", KeyType::Uint, TSKeyOption::default()),
             vals: vec![
-                ("name".to_string(), Type::String),
-                ("age".to_string(), Type::Uint),
+                TSCol::new("name".to_string(), Type::String),
+                TSCol::new("age".to_string(), Type::Uint),
             ],
         }
     }
@@ -336,8 +339,8 @@ mod tests {
     /// Helper schema with a single String value column (meaty payload to force page splits)
     fn stress_schema() -> TableSchema {
         TableSchema {
-            key: ("id".into(), KeyType::Uint),
-            vals: vec![("data".into(), Type::String)],
+            key: TSKey::new("id".into(), KeyType::Uint, TSKeyOption::default()),
+            vals: vec![TSCol::new("data".into(), Type::String)],
         }
     }
 
@@ -461,10 +464,10 @@ mod tests {
     // Helper for test_float_type
     fn schema_float() -> TableSchema {
         TableSchema {
-            key: ("id".to_string(), KeyType::Uint),
+            key: TSKey::new("id", KeyType::Uint, TSKeyOption::default()),
             vals: vec![
-                ("name".to_string(), Type::String),
-                ("win_rate".to_string(), Type::Float),
+                TSCol::new("name".to_string(), Type::String),
+                TSCol::new("win_rate".to_string(), Type::Float),
             ],
         }
     }
