@@ -243,7 +243,6 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
 /// Execute DML: `insert` or `delete` for now
 pub fn execute_dml<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Result<(), ExecErr> {
     match query.root {
-        // TODO NOW: get max_key and insert max_key + 1
         Stmt::Insert {
             table: table_node,
             values,
@@ -252,11 +251,20 @@ pub fn execute_dml<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
                 .get_table_mut(table_node.name.as_str())
                 .map_err(|e| ExecErr::Storage(e))?;
 
-            for val_node in values {
-                let row_data = assemble_row_data(val_node, table.schema())?;
-                table
-                    .insert_row(row_data)
-                    .map_err(|e| ExecErr::Storage(e))?;
+            if table.schema().key.is_auto() {
+                for val_node in values {
+                    let rec_data = assemble_rec_data(val_node, table.schema())?;
+                    table
+                        .insert_row_auto(rec_data)
+                        .map_err(|e| ExecErr::Storage(e))?;
+                }
+            } else {
+                for val_node in values {
+                    let row_data = assemble_row_data(val_node, table.schema())?;
+                    table
+                        .insert_row(row_data)
+                        .map_err(|e| ExecErr::Storage(e))?;
+                }
             }
             repl::output("Done");
         }
@@ -307,7 +315,7 @@ pub fn execute_dml<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
     Ok(())
 }
 
-/// Convert parse tree's RowValueNode to storage engine's RowData
+/// Convert parse tree's RowValueNode to storage engine's RowData.
 // TODO: Support positional + operator literal
 fn assemble_row_data(val_node: RowValueNode, schema: &TableSchema) -> Result<RowData, ExecErr> {
     // NOTE: PK might have to be the first for now.
@@ -323,18 +331,38 @@ fn assemble_row_data(val_node: RowValueNode, schema: &TableSchema) -> Result<Row
     let mut values = val_node.values.into_iter();
     let key_data = expr_to_col_data(values.next().unwrap(), schema.key.key_type.into())?;
 
-    let mut rec_data = RecData {
-        vals: Vec::with_capacity(schema.vals.len()),
-    };
+    let mut rec_data = RecData::with_capacity(schema.vals.len());
     for (i, expr_node) in values.enumerate() {
         let col_data = expr_to_col_data(expr_node, schema.vals[i].col_type)?;
-        rec_data.vals.push(col_data);
+        rec_data.push(col_data);
     }
 
     Ok(RowData {
         key: key_data.try_into().map_err(|e| ExecErr::Storage(e))?,
         vals: rec_data,
     })
+}
+
+/// Assemble record data for RowValueNode that doesn't need key
+/// requires: schema.key.is_auto() is true
+fn assemble_rec_data(val_node: RowValueNode, schema: &TableSchema) -> Result<RecData, ExecErr> {
+    debug_assert!(schema.key.is_auto());
+
+    // Don't want key
+    if val_node.values.len() != schema.num_cols() - 1 {
+        return Err(ExecErr::UnmatchedNumValues(
+            schema.num_cols() - 1,
+            val_node.values.len(),
+        ));
+    }
+
+    let mut rec_data = RecData::with_capacity(schema.vals.len());
+    for (i, expr_node) in val_node.values.into_iter().enumerate() {
+        let col_data = expr_to_col_data(expr_node, schema.vals[i].col_type)?;
+        rec_data.push(col_data);
+    }
+
+    Ok(rec_data)
 }
 
 /// Convert const expression node in parse tree to storage engine's ColData

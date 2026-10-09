@@ -119,6 +119,11 @@ impl TSKey {
     pub fn set_is_auto(&mut self, val: bool) {
         self.option.is_auto = val;
     }
+
+    /// Is it auto incremented key
+    pub fn is_auto(&self) -> bool {
+        self.option.is_auto
+    }
 }
 
 /// Represent user-defined row schema in order
@@ -401,6 +406,59 @@ impl Table {
             Ok(_) => Ok(()),
             Err(PageFull) => {
                 self.split_insert_leaf(path, data)?;
+                Ok(())
+            }
+            e => e,
+        }
+    }
+
+    /// Insert row with just RecData using automatically incremented key
+    // Steps:
+    // 1. Traverse to rightmost page while building a path
+    // 2. Insert there with max_key + 1
+    pub fn insert_row_auto(&mut self, rec: RecData) -> Result<(), EngineErr> {
+        // TODO(overflow): implement overflow page
+        assert!(rec.size() + 8 /* max key size */ <= MAX_RECORD_SIZE);
+
+        // insert a page and data with key = 0 if table empty
+        if self.pager.num_pages() == 0 {
+            let key_type = self.schema().key.key_type;
+            let root = self.pager.new_page_mut(true, true);
+            self.root_id = root.id();
+            let key = match key_type {
+                KeyType::Uint => KeyData::Uint(0),
+                KeyType::Ulong => KeyData::Ulong(0),
+            };
+            return root.insert_cell(key, CellValue::Leaf(&rec.to_bytes()));
+        }
+
+        let mut path = Path::new();
+        let mut page = self.pager.page_mut(self.root_id).unwrap();
+        while !page.is_leaf() {
+            // Go to most right child
+            path.push(PathEntry {
+                page: page.id(),
+                idx: page.num_cells() - 1,
+            });
+            if let CellValue::Internal(togo) = page.last_cell().unwrap().value() {
+                page = self.pager.page_mut(togo).unwrap();
+            } else {
+                unreachable!("Shouldn't get leaf cell in internal node");
+            }
+        }
+
+        // Last page in path is leaf
+        path.push(PathEntry {
+            page: page.id(),
+            idx: 0, /* dummy */
+        });
+
+        let key = page.last_cell().unwrap().key().add(1);
+        let res = page.insert_cell(key, CellValue::Leaf(&rec.to_bytes()));
+        match res {
+            Ok(_) => Ok(()),
+            Err(PageFull) => {
+                self.split_insert_leaf(path, RowData { key, vals: rec })?;
                 Ok(())
             }
             e => e,

@@ -373,6 +373,15 @@ impl KeyData {
             Ulong(d) => d.to_be_bytes().to_vec(),
         }
     }
+
+    /// Key is numerical, so we can add it by another numerical value
+    /// returns another key data as a result of add.
+    fn add(&self, rhs: u32) -> Self {
+        match self {
+            KeyData::Uint(v) => KeyData::Uint(v + rhs),
+            KeyData::Ulong(v) => KeyData::Ulong(v + rhs as u64),
+        }
+    }
 }
 
 impl From<KeyData> for ColData {
@@ -450,6 +459,13 @@ pub struct RecData {
 }
 
 impl RecData {
+    /// Allocate RecData with capacity
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            vals: Vec::with_capacity(cap),
+        }
+    }
+    /// Get size in bytes of entire RecData
     pub fn size(&self) -> usize {
         self.vals.iter().map(|col_data| col_data.size()).sum()
     }
@@ -460,6 +476,10 @@ impl RecData {
             col.serialize_into(&mut v);
         }
         v
+    }
+    /// Push column data
+    pub fn push(&mut self, data: ColData) {
+        self.vals.push(data)
     }
 }
 
