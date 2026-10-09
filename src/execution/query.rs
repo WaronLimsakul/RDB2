@@ -211,7 +211,9 @@ pub fn execute_ddl<'a>(query: ParseTree, engine: &'a mut StorageEngine) -> Resul
                 data: vec![
                     ColData::String(key.name.clone()),
                     ColData::String(format!("{}", key.key_type.clone())),
-                    ColData::String("Primary Key".to_string()),
+                    ColData::String(
+                        "Primary Key".to_string() + if key.is_auto() { ", Auto" } else { "" },
+                    ),
                 ],
             };
             report_rows.push(key_row);
