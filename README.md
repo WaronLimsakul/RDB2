@@ -5,6 +5,7 @@ A basic relational database implementation by Ron.
 ## Features
 
 - Disk-backed tables indexed by a primary-key B-tree
+- Auto-incremented primary keys
 - `new table`, `insert`, `delete`, `select ... where`, `drop table`
 - Filtering with `=`, `!=`, `<`, `<=`, `>`, `>=`, combined with `&&`
 - REPL with line history, pretty-printed table output, and meta commands
@@ -35,6 +36,12 @@ new table User { id: uint primary, name: string, age: uint };
 One column must be marked `primary`, and its type must be `uint` or `ulong`.
 Other column types are `int`, `long`, `float`, `bool`, `string`.
 
+Add `auto` after `primary` to let RDB2 generate the key for you:
+
+```sql
+new table Post { id: uint primary auto, title: string };
+```
+
 ### Insert rows
 
 ```sql
@@ -44,6 +51,8 @@ insert User [(2, "Bob", 25), (3, "Charlie", 35)];
 
 Values are positional: primary key first, then the other columns in the order
 you declared them.
+
+NOTE: If the primary key is `auto`, you can leave it out.
 
 ### Query
 

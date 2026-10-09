@@ -4,7 +4,7 @@ It should be defined when create a table, will only support it in primary key fo
 
 ```
 new table Foo {
-    id PRIMARY AUTO,
+    id: uint PRIMARY AUTO,
     ...
 };
 ```

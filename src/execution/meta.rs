@@ -24,13 +24,15 @@ Meta commands
   .quit, .exit      Flush changes to disk and exit
 
 Statements (end with a semicolon)
-  new table <name> { <col>: <type> primary, ... };
+  new table <name> { <col>: <type> primary [auto], ... };
       Create a table. One column must be primary, typed uint or ulong.
+      `auto` makes the primary key auto-incremented.
 
   insert <name> (<values>);
   insert <name> [(<values>), ...];
       Insert one row, or several at once. Values are positional: primary
       key first, then the rest in the order the columns were declared.
+      An auto primary key can be left out; it becomes largest key + 1.
 
   select <cols> from <name>[, <name>...] [where <cond>];
       Query rows. <cols> is * or a comma-separated list of column names.
